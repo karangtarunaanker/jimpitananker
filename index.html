@@ -1237,7 +1237,7 @@ function srchScan(){
   if(!q){el.innerHTML='';return;}
   const m=MEM.warga.filter(w=>w.name.toLowerCase().includes(q)).slice(0,8);
   el.innerHTML=m.length===0?'<div style="color:var(--tl);font-size:12px;text-align:center;padding:10px">Tidak ditemukan</div>':
-    m.map(w=>`<div class="li" onclick="showConfirm(MEM.warga.find(x=>x.id==='${w.id}'))" style="cursor:pointer">
+    m.map(w=>`<div class="li" onclick="procScan(JSON.stringify({id:'${w.id}'}))">
       <div class="av">${w.name[0]}</div>
       <div style="flex:1"><div class="wn">${w.name}</div>
         <div class="ws">${w.rt}${debtWeeks(w.id).length>0?' · ⚠️ '+debtWeeks(w.id).length+' tunggak':''}</div></div>
@@ -1829,7 +1829,7 @@ function openManualTrx(){
   document.getElementById('mt_nom').value=MEM.nominal;
   document.getElementById('mt_jenis').value='normal';
   document.getElementById('mt_preview').textContent='';
-  filterMtWarga();
+  document.getElementById('mt_drop').style.display='none';
   openModal('moManualTrx');
 }
 
@@ -1866,10 +1866,12 @@ function doManualTrx(){
   if(nom<=0||!tglVal){showToast('❌ Isi semua kolom');return;}
 
   // Cek apakah hari yang dipilih sudah ada transaksi input manual untuk anggota ini
-  const todayTrx=MEM.transaksi.filter(t=>t.wargaId===wid && t.date && t.date.startsWith(tglVal));
+ const todayTrx=MEM.transaksi.filter(t=>t.wargaId===wid && !t.isCredit && t.date && t.date.startsWith(tglVal));
   if(todayTrx.length>0){
     const w2=MEM.warga.find(x=>x.id===wid);
-    if(!confirm(`⚠️ Peringatan!\n${w2?.name||'Anggota'} sudah memiliki ${todayTrx.length} transaksi pada tanggal ${tglVal}.\n\nLanjutkan input?`)){return;}
+    closeModal('moManualTrx');
+    showWarnDuplikat(w2, todayTrx);
+    return;
   }
 
   const tglDate=new Date(tglVal+'T12:00:00');
@@ -2501,8 +2503,9 @@ function _buildRekapJimpitan(){
     const sudahLewat=now>wk.end;
     const belumLewat=now<wk.start;
 
-    const tunggakanDetail=Object.entries(tunggakanPerWarga).map(([n,r])=>
-      `<div style="margin-left:12px;font-size:11px;color:#666;padding:1px 0">↳ ${n}: <b style="color:var(--red)">${rpFmt(r)}</b></div>`).join('');
+const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:2px">
+  ${Object.entries(tunggakanPerWarga).map(([n,r])=>
+    `<span style="font-size:11px;color:#666">⚠ ${n}: <b style="color:var(--red)">${rpFmt(r)}</b></span>`).join('')}</div>`;
 
     html+=`
     <div class="cd" style="margin-bottom:8px;padding:12px${belumLewat?';opacity:0.5':''}">
