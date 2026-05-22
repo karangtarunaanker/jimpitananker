@@ -1457,11 +1457,14 @@ function pgTunggakan(){
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('home')">← Beranda</button>
     <div class="ct">⚠️ Rekap Tunggakan</div>
+    <input class="si" id="tSearch" placeholder="🔍 Cari nama anggota..." oninput="buildTunggakan(tFilter)" style="margin-bottom:8px">
     <div class="fr" id="tFR">
       <button class="fp active" id="tAll" onclick="filterTunggakan('all')">Semua</button>
       <button class="fp" id="tRT1" onclick="filterTunggakan('RT 01')">RT 01</button>
       <button class="fp" id="tRT2" onclick="filterTunggakan('RT 02')">RT 02</button>
+      ${(CU.role==='admin'||CU.role==='divisi')?`
       <button class="fp" style="background:var(--red);border-color:var(--red);color:#fff" onclick="exportTunggakan()">📥 Ekspor</button>
+      <button class="fp" style="background:#1a3a5c;border-color:#1a3a5c;color:#fff" onclick="openPrintTunggakan()">🖨️ Print</button>`:''}
     </div>
     <div class="sg" id="tStats"></div>
     <div class="cd"><div id="tList"></div></div>`;
@@ -1475,13 +1478,22 @@ function filterTunggakan(f){
   buildTunggakan(f);
 }
 function buildTunggakan(f){
-  const warga=MEM.warga.filter(w=>f==='all'||w.rt===f);
+  const q=(document.getElementById('tSearch')||{}).value?.toLowerCase()||'';
+  const warga=MEM.warga.filter(w=>(f==='all'||w.rt===f)&&(!q||w.name.toLowerCase().includes(q)));
   const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:debtWeeks(w.id).length*MEM.nominal}))
     .filter(w=>w.dw.length>0).sort((a,b)=>b.dw.length-a.dw.length);
   const totalDebt=debtors.reduce((s,w)=>s+w.dr,0);
   document.getElementById('tStats').innerHTML=`
-    <div class="sb"><div class="sl">Anggota Menunggak</div><div class="sv red">${debtors.length}</div></div>
-    <div class="sb"><div class="sl">Total Tunggakan</div><div class="sv red">${rpFmt(totalDebt)}</div></div>`;
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <div style="padding:8px 12px;background:#e8f5e9;border-radius:10px;border:1.5px solid #b2dfdb">
+        <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Anggota Menunggak</div>
+        <div style="font-size:18px;font-weight:800;color:#1a6b3c">${debtors.length} <span style="font-size:12px;font-weight:600">orang</span></div>
+      </div>
+      <div style="padding:8px 12px;background:#e8f5e9;border-radius:10px;border:1.5px solid #b2dfdb">
+        <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Total Tunggakan</div>
+        <div style="font-size:15px;font-weight:800;color:#1a6b3c;font-family:'JetBrains Mono',monospace">${rpFmt(totalDebt)}</div>
+      </div>
+    </div>`;
   const el=document.getElementById('tList'); if(!el)return;
   const canEdit=CU.role==='admin'||CU.role==='divisi';
   el.innerHTML=debtors.length===0?'<div class="empty"><div class="ei">🎉</div>Semua anggota lunas!</div>':
@@ -1558,6 +1570,233 @@ function exportTunggakan(){
   XLSX.writeFile(wb,`Tunggakan-Jimpitan-${Date.now()}.xlsx`);
   showToast('📥 Laporan tunggakan diunduh!');
 }
+
+// ── PRINT TAGIHAN TUNGGAKAN ──────────────────────────────────
+
+// ── TERBILANG ────────────────────────────────────────────────
+function terbilang(n){
+  const satuan=['','satu','dua','tiga','empat','lima','enam','tujuh','delapan','sembilan',
+    'sepuluh','sebelas','dua belas','tiga belas','empat belas','lima belas','enam belas',
+    'tujuh belas','delapan belas','sembilan belas'];
+  const puluhan=['','','dua puluh','tiga puluh','empat puluh','lima puluh',
+    'enam puluh','tujuh puluh','delapan puluh','sembilan puluh'];
+  if(n===0) return 'nol';
+  if(n<0) return 'minus '+terbilang(-n);
+  let hasil='';
+  if(n>=1000000000){ hasil+=terbilang(Math.floor(n/1000000000))+' miliar '; n%=1000000000; }
+  if(n>=1000000){ hasil+=terbilang(Math.floor(n/1000000))+' juta '; n%=1000000; }
+  if(n>=1000){ const r=Math.floor(n/1000); hasil+=(r===1?'seribu':terbilang(r)+' ribu')+' '; n%=1000; }
+  if(n>=100){ const r=Math.floor(n/100); hasil+=(r===1?'seratus':terbilang(r)+' ratus')+' '; n%=100; }
+  if(n>=20){ hasil+=puluhan[Math.floor(n/10)]; if(n%10) hasil+=' '+satuan[n%10]; }
+  else if(n>0){ hasil+=satuan[n]; }
+  return hasil.trim();
+}
+function terbilangRupiah(n){
+  if(!n||n===0) return 'nol rupiah';
+  return terbilang(n)+' rupiah';
+}
+
+function openPrintTunggakan(){
+  const warga=MEM.warga.filter(w=>tFilter==='all'||w.rt===tFilter);
+  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:debtWeeks(w.id).length*MEM.nominal}))
+    .filter(w=>w.dw.length>0).sort((a,b)=>b.dw.length-a.dw.length);
+  if(!debtors.length){showToast('✅ Tidak ada anggota menunggak');return;}
+
+  const existing=document.getElementById('_modalPrintTunggakan');
+  if(existing) existing.remove();
+  const m=document.createElement('div');
+  m.id='_modalPrintTunggakan';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto';
+
+  m.innerHTML=`
+    <div style="background:#fff;border-radius:16px;padding:20px;width:100%;max-width:480px;margin:auto">
+      <div style="font-weight:700;font-size:16px;color:var(--g);margin-bottom:4px">🖨️ Print Tagihan Tunggakan</div>
+      <div style="font-size:12px;color:var(--tl);margin-bottom:14px">Pilih anggota, edit nominal, dan atur denda sebelum cetak.</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:var(--tl);margin-bottom:3px">Ukuran Kertas</div>
+          <select id="_pt_kertas" class="fi" style="padding:7px 10px;font-size:13px">
+            <option value="a4">A4</option>
+            <option value="f4">F4 (Folio)</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button onclick="_ptPilihSemua()" style="width:100%;padding:7px;background:var(--gp);border:1px solid var(--gm);color:var(--g);border-radius:8px;font-size:12px;font-weight:600;cursor:pointer">☑️ Pilih Semua</button>
+        </div>
+      </div>
+
+      <div id="_pt_list" style="display:flex;flex-direction:column;gap:8px;max-height:55vh;overflow-y:auto;margin-bottom:14px">
+        ${debtors.map((w,i)=>`
+        <div style="border:1px solid #e0e0e0;border-radius:10px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <input type="checkbox" id="_ptc_${i}" checked style="width:16px;height:16px;cursor:pointer;accent-color:var(--g)">
+            <label for="_ptc_${i}" style="font-weight:700;font-size:13px;cursor:pointer;flex:1">${w.name}</label>
+            <span style="font-size:11px;color:var(--tl)">${w.dw.length} minggu · ${rpFmt(w.dr)}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;padding-left:24px">
+            <div>
+              <div style="font-size:10px;color:var(--tl);font-weight:600;margin-bottom:2px">Nominal Tagihan (Rp)</div>
+              <input type="number" id="_ptn_${i}" value="${w.dr}" min="0"
+                class="fi" style="padding:5px 8px;font-size:12px;margin:0"
+                oninput="_ptUpdateTotal(${i})">
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--tl);font-weight:600;margin-bottom:2px">Denda</div>
+              <div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px">
+                  <input type="checkbox" id="_ptd_${i}" style="accent-color:var(--red);width:14px;height:14px" onchange="_ptUpdateTotal(${i})">
+                  <span>Rp 10.000</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div id="_ptt_${i}" style="margin-top:6px;padding-left:24px;font-size:11px;color:var(--g);font-weight:700"></div>
+        </div>`).join('')}
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button onclick="document.getElementById('_modalPrintTunggakan').remove()"
+          style="padding:11px;background:#f0f0f0;border:none;border-radius:10px;font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;color:#666">
+          ✕ Batal
+        </button>
+        <button onclick="_doPrintTunggakan()"
+          style="padding:11px;background:linear-gradient(135deg,#1a3a5c,#2563a8);color:#fff;border:none;border-radius:10px;
+          font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;
+          box-shadow:0 4px 12px rgba(26,58,92,.35)">
+          🖨️ Cetak
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(m);
+  window._ptDebtors = debtors;
+  debtors.forEach((_,i)=>_ptUpdateTotal(i));
+}
+
+function _ptPilihSemua(){
+  const checks=document.querySelectorAll('[id^="_ptc_"]');
+  const allChecked=[...checks].every(c=>c.checked);
+  checks.forEach(c=>c.checked=!allChecked);
+}
+
+function _ptUpdateTotal(i){
+  const nom=parseInt(document.getElementById('_ptn_'+i)?.value)||0;
+  const denda=document.getElementById('_ptd_'+i)?.checked?10000:0;
+  const el=document.getElementById('_ptt_'+i);
+  if(el) el.textContent=denda>0?`Total: ${(nom+denda).toLocaleString('id-ID')} (termasuk denda Rp 10.000)`:`Total: ${nom.toLocaleString('id-ID')}`;
+}
+
+function _doPrintTunggakan(){
+  const debtors=window._ptDebtors||[];
+  const kertas=document.getElementById('_pt_kertas').value;
+  const selected=debtors.filter((_,i)=>document.getElementById('_ptc_'+i)?.checked);
+  if(!selected.length){showToast('⚠️ Pilih minimal 1 anggota');return;}
+
+  const now=new Date();
+  const tglCetak=now.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  // Batas bayar: tanggal 15 bulan depan
+  const bln15=new Date(now.getFullYear(),now.getMonth()+1,15);
+  const tglBatas=bln15.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+
+  const pageW=kertas==='f4'?215:210;
+  const pageH=kertas==='f4'?330:297;
+
+  const cards=selected.map((w,i)=>{
+    const nom=parseInt(document.getElementById('_ptn_'+i)?.value)||0;
+    const denda=document.getElementById('_ptd_'+i)?.checked?10000:0;
+    const total=nom+denda;
+    const dw=w.dw||[];
+
+    return `
+    <div class="kartu">
+      <div class="kop">
+        <div class="kop-title">TAGIHAN JIMPITAN KARANG TARUNA ANKER</div>
+        <div class="kop-tgl">${tglCetak}</div>
+      </div>
+      <div class="isi">
+        <p class="intro">Dengan adanya surat ini, kami pengurus ingin memberitahukan bahwa:</p>
+        <table class="dtbl">
+          <tr><td class="lbl">Nama</td><td class="sep">:</td><td class="val"><b>${w.name}</b></td></tr>
+          <tr><td class="lbl">Jumlah Tunggakan</td><td class="sep">:</td><td class="val">${dw.length} minggu</td></tr>
+          <tr><td class="lbl">Nominal</td><td class="sep">:</td><td class="val">Rp ${nom.toLocaleString('id-ID')}</td></tr>
+          ${denda>0?`<tr><td class="lbl">Denda</td><td class="sep">:</td><td class="val" style="color:#c0392b">Rp ${denda.toLocaleString('id-ID')}</td></tr>`:''}
+          <tr class="total-row"><td class="lbl"><b>Total</b></td><td class="sep">:</td><td class="val"><b>Rp ${total.toLocaleString('id-ID')}</b> <span class="terbilang">( ${terbilangRupiah(total)} )</span></td></tr>
+        </table>
+        <p class="penutup">Mohon untuk segera menghubungi divisi jimpitan untuk melakukan pelunasan <b>sebelum tanggal ${tglBatas}</b>.</p>
+      </div>
+      <div class="ttd">
+        <div class="ttd-label">Divisi Jimpitan</div>
+        <div class="ttd-space"></div>
+        <div class="ttd-garis"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // A4=3 kartu, F4=4 kartu per halaman — 1 kolom
+  const kartuPerHal=kertas==='f4'?4:3;
+  const hKartu=Math.floor((pageH-12)/kartuPerHal); // tinggi per kartu dalam mm
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Tagihan Tunggakan Jimpitan</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',Arial,sans-serif}
+    body{background:#f5f5f5;padding:0}
+    .toolbar{background:#1a3a5c;color:#fff;padding:8px 14px;display:flex;align-items:center;gap:10px;font-size:13px}
+    .toolbar b{flex:1}
+    .btn-print{padding:7px 18px;background:#fff;color:#1a3a5c;border:none;border-radius:6px;font-weight:700;font-size:13px;cursor:pointer}
+    .btn-pdf{padding:7px 18px;background:#27ae60;color:#fff;border:none;border-radius:6px;font-weight:700;font-size:13px;cursor:pointer}
+    .halaman{padding:8mm;background:#fff}
+    .kartu{
+      border:1.5px solid #2c3e50;
+      border-radius:8px;
+      padding:12px 16px;
+      background:#fff;
+      break-inside:avoid;
+      height:${hKartu}mm;
+      display:flex;
+      flex-direction:column;
+      justify-content:space-between;
+      margin-bottom:4mm;
+    }
+    .kartu:last-child{margin-bottom:0}
+    .kop{text-align:center;padding-bottom:7px;border-bottom:2px solid #000;margin-bottom:8px}
+    .kop-title{font-size:16px;font-weight:900;color:#000;letter-spacing:.5px;text-transform:uppercase}
+    .kop-sub{display:none}
+    .kop-tgl{font-size:12px;color:#555;margin-top:3px}
+    .isi{flex:1}
+    .intro{font-size:12px;color:#444;margin-bottom:8px;font-style:italic;line-height:1.5}
+    .dtbl{width:100%;border-collapse:collapse}
+    .dtbl td{padding:4px 3px;vertical-align:top}
+    .lbl{color:#555;width:36%;font-size:12px}
+    .sep{width:3%;color:#555;font-size:12px}
+    .val{font-size:12px;color:#111}
+    .total-row td{padding-top:7px;border-top:1.5px dashed #999;font-size:13px}
+    .terbilang{font-size:11px;color:#555;font-style:italic;padding-left:4px}
+    .penutup{font-size:11px;color:#333;margin-top:8px;line-height:1.6;border-top:1px solid #eee;padding-top:6px}
+    .ttd{margin-top:8px;text-align:right}
+    .ttd-label{font-size:13px;font-weight:700;color:#1a3a5c}
+    .ttd-space{height:28px}
+    .ttd-garis{border-top:1px solid #333;width:120px;margin-left:auto}
+    @media print{
+      .toolbar{display:none}
+      body{background:#fff}
+      @page{size:${pageW}mm ${pageH}mm;margin:0}
+      .halaman{padding:8mm}
+    }
+  </style></head>
+  <body>
+    <div class="toolbar">
+      <b>🖨️ Tagihan Tunggakan Jimpitan</b>
+      <button class="btn-pdf" onclick="window.print()">💾 Simpan PDF</button>
+      <button class="btn-print" onclick="window.print()">🖨️ Print</button>
+    </div>
+    <div class="halaman">${cards}</div>
+  </body></html>`;
+  const blob=new Blob([html],{type:'text/html'});
+  const url=URL.createObjectURL(blob);
+  window.open(url,'_blank');
+  document.getElementById('_modalPrintTunggakan').remove();
+}
+
 
 // ── RIWAYAT SCAN (admin/divisi = semua, petugas = hari ini milik sendiri) ──
 function pgRiwayatScan(){
@@ -2252,21 +2491,26 @@ function _renderKas(jenis){
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('kas')">← Kas</button>
     <div class="ct">${judul}</div>
-    <div class="cd" style="margin-bottom:12px">
-      <div class="ct" style="font-size:13px;margin-bottom:10px">➕ Tambah Entri</div>
-      <div class="fg"><label>Tanggal</label><input id="k_tgl" class="fi" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="fg"><label>Keterangan</label><input id="k_ket" class="fi" type="text" placeholder="Keterangan..."></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div class="fg"><label>Pemasukan (Rp)</label><input id="k_masuk" class="fi" type="number" min="0" placeholder="0"></div>
-        <div class="fg"><label>Pengeluaran (Rp)</label><input id="k_keluar" class="fi" type="number" min="0" placeholder="0"></div>
+    <div class="cd" style="margin-bottom:10px;padding:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--g);margin-bottom:8px">➕ Tambah Entri</div>
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:6px;margin-bottom:6px">
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Tanggal</label>
+          <input id="k_tgl" class="fi" type="date" value="${new Date().toISOString().slice(0,10)}" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Keterangan</label>
+          <input id="k_ket" class="fi" type="text" placeholder="Keterangan..." style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
       </div>
-      <button onclick="_tambahKas('${jenis}')"
-        style="width:100%;margin-top:10px;padding:13px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:12px;
-        font-family:'Plus Jakarta Sans',sans-serif;font-size:15px;font-weight:700;cursor:pointer;
-        box-shadow:0 4px 14px rgba(26,107,60,.35);letter-spacing:.3px;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity .2s"
-        onmouseover="this.style.opacity='.88'" onmouseout="this.style.opacity='1'">
-        <span style="font-size:18px">💾</span> Simpan Entri
-      </button>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:end">
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Pemasukan (Rp)</label>
+          <input id="k_masuk" class="fi" type="number" min="0" placeholder="0" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Pengeluaran (Rp)</label>
+          <input id="k_keluar" class="fi" type="number" min="0" placeholder="0" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <button onclick="_tambahKas('${jenis}')"
+          style="padding:7px 14px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:10px;
+          font-family:'Plus Jakarta Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;
+          box-shadow:0 3px 10px rgba(26,107,60,.3)">
+          💾 Simpan
+        </button>
+      </div>
     </div>
     <div class="cd">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -2288,10 +2532,19 @@ function _buildKasList(jenis){
   const totKeluar=rows.reduce((s,r)=>s+(r.keluar||0),0);
   const saldoAkhir=totMasuk-totKeluar;
   el.innerHTML=`
-    <div class="sg" style="margin-bottom:10px">
-      <div class="sb"><div class="sl">Total Masuk</div><div class="sv" style="color:var(--g)">${rpFmt(totMasuk)}</div></div>
-      <div class="sb"><div class="sl">Total Keluar</div><div class="sv" style="color:var(--red)">${rpFmt(totKeluar)}</div></div>
-      <div class="sb" style="grid-column:1/-1"><div class="sl">Saldo Akhir</div><div class="sv gold">${rpFmt(saldoAkhir)}</div></div>
+    <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:80px;padding:6px 10px;background:#e8f5e9;border-radius:8px;text-align:center">
+        <div style="font-size:10px;color:var(--tl);font-weight:600">Masuk</div>
+        <div style="font-size:12px;font-weight:700;color:var(--g);font-family:'JetBrains Mono',monospace">${rpFmt(totMasuk)}</div>
+      </div>
+      <div style="flex:1;min-width:80px;padding:6px 10px;background:#fff0f0;border-radius:8px;text-align:center">
+        <div style="font-size:10px;color:var(--tl);font-weight:600">Keluar</div>
+        <div style="font-size:12px;font-weight:700;color:var(--red);font-family:'JetBrains Mono',monospace">${rpFmt(totKeluar)}</div>
+      </div>
+      <div style="flex:1;min-width:80px;padding:6px 10px;background:#fffbe6;border-radius:8px;text-align:center">
+        <div style="font-size:10px;color:var(--tl);font-weight:600">Saldo</div>
+        <div style="font-size:12px;font-weight:700;color:var(--gold);font-family:'JetBrains Mono',monospace">${rpFmt(saldoAkhir)}</div>
+      </div>
     </div>
     <div class="tscroll"><table class="rtbl" style="font-size:12px">
       <tr><th>Tanggal</th><th>Keterangan</th><th>Masuk</th><th>Keluar</th><th>Saldo</th><th></th></tr>
@@ -2407,7 +2660,6 @@ function pgRekapJimpitan(){
   if(CU.role!=='admin'&&CU.role!=='divisi'&&CU.role!=='anggota'){go('home');return;}
   curPage='rekapJimpitan';
   const now=new Date();
-  // Buat daftar bulan yang ada transaksi (+ bulan sekarang)
   const bulanSet=new Set();
   bulanSet.add(now.getFullYear()+'-'+(now.getMonth()));
   MEM.transaksi.forEach(t=>{
@@ -2415,23 +2667,39 @@ function pgRekapJimpitan(){
     bulanSet.add(d.getFullYear()+'-'+d.getMonth());
   });
   const bulanList=[...bulanSet].sort((a,b)=>b.localeCompare(a));
-  const mn=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
+  const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const mnS=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
 
-  // Simpan pilihan bulan aktif
-  if(!window._rjBulan) window._rjBulan=bulanList[0];
-  if(!bulanList.includes(window._rjBulan)) window._rjBulan=bulanList[0];
+  // Kelompokkan per tahun
+  const tahunMap={};
+  bulanList.forEach(b=>{
+    const [y,m]=b.split('-').map(Number);
+    if(!tahunMap[y]) tahunMap[y]=[];
+    tahunMap[y].push({b,m});
+  });
+  const tahunList=Object.keys(tahunMap).map(Number).sort((a,b)=>b-a);
+  if(!window._rjTahun||!tahunMap[window._rjTahun]) window._rjTahun=tahunList[0];
+  const bulanTahunIni=tahunMap[window._rjTahun]||[];
+  if(!bulanTahunIni.find(x=>x.b===window._rjBulan)) window._rjBulan=bulanTahunIni[0]?.b||bulanList[0];
 
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="${CU.role==='admin'?'go(\'kas\')':'go(\'home\')'} ">← ${CU.role==='admin'?'Kas':'Beranda'}</button>
     <div class="ct">📊 Rekap Jimpitan</div>
-    <div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:12px">
-      ${bulanList.map(b=>{
-        const [y,m]=b.split('-').map(Number);
-        return`<button onclick="window._rjBulan='${b}';pgRekapJimpitan()"
-          style="flex-shrink:0;padding:6px 14px;border-radius:20px;border:none;cursor:pointer;font-size:13px;font-weight:600;
-          background:${window._rjBulan===b?'var(--g)':'#e8f5e9'};color:${window._rjBulan===b?'#fff':'var(--g)'}">
-          ${mn[m]} ${y}</button>`;
-      }).join('')}
+    <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:12px;align-items:end">
+      <div>
+        <div style="font-size:11px;color:var(--tl);margin-bottom:3px;font-weight:600;text-transform:uppercase">Tahun</div>
+        <select class="fi" style="padding:8px 10px;font-size:14px;font-weight:700;color:var(--g)"
+          onchange="window._rjTahun=parseInt(this.value);window._rjBulan=null;pgRekapJimpitan()">
+          ${tahunList.map(y=>`<option value="${y}" ${window._rjTahun===y?'selected':''}>${y}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--tl);margin-bottom:3px;font-weight:600;text-transform:uppercase">Bulan</div>
+        <select class="fi" style="padding:8px 10px;font-size:14px;font-weight:700;color:var(--g)"
+          onchange="window._rjBulan=this.value;_buildRekapJimpitan()">
+          ${bulanTahunIni.map(({b,m})=>`<option value="${b}" ${window._rjBulan===b?'selected':''}>${mn[m]}</option>`).join('')}
+        </select>
+      </div>
     </div>
     <div id="rjContent"></div>`;
   _buildRekapJimpitan();
@@ -2568,10 +2836,25 @@ const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;
         </div>
       </div>`:''}
 
-      <div style="border-top:1px solid #e0e0e0;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between">
+      <div style="border-top:1px solid #e0e0e0;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:center">
         <div style="font-weight:700">Total Minggu</div>
         <div style="font-weight:700;color:var(--g)">${rpFmt(total)}</div>
       </div>
+      ${isAdmin&&sudahLewat?(()=>{
+        const kasKey='KJ_'+wk.key;
+        const sudahCatat=Array.isArray(MEM.kasJimpitan)&&MEM.kasJimpitan.find(r=>r.id===kasKey);
+        return sudahCatat
+          ? `<div style="margin-top:8px;padding:6px 10px;background:#e8f5e9;border-radius:8px;font-size:11px;color:var(--g);display:flex;justify-content:space-between;align-items:center">
+              <span>✅ Sudah dicatat ke Kas Jimpitan</span>
+              <button class="bsm bsm-r" style="font-size:10px;padding:3px 8px" onclick="_hapusRjKas('${kasKey}')">Hapus</button>
+            </div>`
+          : `<button onclick="_catatRjKas('${wk.key}','${wk.label}',${total})"
+              style="width:100%;margin-top:8px;padding:8px;background:linear-gradient(135deg,var(--g),var(--gl));
+              color:#fff;border:none;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;
+              font-family:'Plus Jakarta Sans',sans-serif">
+              📒 Catat ke Kas Jimpitan
+            </button>`;
+      })():''}
     </div>`;
   });
 
@@ -2591,7 +2874,25 @@ function _saveRekapEdit(weekKey, field, val){
   if(!MEM.rekapEdit[weekKey]) MEM.rekapEdit[weekKey]={};
   MEM.rekapEdit[weekKey][field]=parseInt(val)||0;
   saveMEM();
-  // Update total tanpa re-render penuh (cegah keyboard hilang)
+  _buildRekapJimpitan();
+}
+
+function _catatRjKas(weekKey, weekLabel, total){
+  if(!Array.isArray(MEM.kasJimpitan)) MEM.kasJimpitan=[];
+  const kasKey='KJ_'+weekKey;
+  if(MEM.kasJimpitan.find(r=>r.id===kasKey)){showToast('\u26a0\ufe0f Sudah pernah dicatat');return;}
+  const tgl=new Date().toISOString().split('T')[0];
+  MEM.kasJimpitan.push({id:kasKey,tgl,ket:'Rekap Jimpitan \u2014 '+weekLabel,masuk:total,keluar:0});
+  saveMEM();
+  showToast('\u2705 Berhasil dicatat ke Kas Jimpitan!');
+  _buildRekapJimpitan();
+}
+
+function _hapusRjKas(kasKey){
+  if(!Array.isArray(MEM.kasJimpitan)) return;
+  MEM.kasJimpitan=MEM.kasJimpitan.filter(r=>r.id!==kasKey);
+  saveMEM();
+  showToast('\uD83D\uDDD1\uFE0F Catatan kas dihapus');
   _buildRekapJimpitan();
 }
 
