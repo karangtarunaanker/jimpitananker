@@ -2882,7 +2882,7 @@ function _catatRjKas(weekKey, weekLabel, total){
   const kasKey='KJ_'+weekKey;
   if(MEM.kasJimpitan.find(r=>r.id===kasKey)){showToast('\u26a0\ufe0f Sudah pernah dicatat');return;}
   const tgl=new Date().toISOString().split('T')[0];
-  MEM.kasJimpitan.push({id:kasKey,tgl,ket:'Rekap Jimpitan \u2014 '+weekLabel,masuk:total,keluar:0});
+  MEM.kasJimpitan.push({id:kasKey,tgl,ket:'Jimpitan '+weekLabel,masuk:total,keluar:0});
   saveMEM();
   showToast('\u2705 Berhasil dicatat ke Kas Jimpitan!');
   _buildRekapJimpitan();
