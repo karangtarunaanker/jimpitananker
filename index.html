@@ -2547,7 +2547,7 @@ function _buildKasList(jenis){
       </div>
     </div>
     <div class="tscroll"><table class="rtbl" style="font-size:12px">
-      <tr><th>Tanggal</th><th>Keterangan</th><th>Masuk</th><th>Keluar</th><th>Saldo</th><th></th></tr>
+      <tr><th style="width:60px">Tanggal</th><th style="min-width:180px">Keterangan</th><th>Masuk</th><th>Keluar</th><th>Saldo</th><th></th></tr>
       ${rows.map((r,i)=>`<tr style="${i%2?'background:#f7fbf8':''}">
         <td style="white-space:nowrap">${new Date(r.tgl+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'2-digit'})}</td>
         <td>${r.ket}</td>
