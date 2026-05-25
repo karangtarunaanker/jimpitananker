@@ -549,7 +549,7 @@ const W2=['ABRIANO','AFRI','AGUNG','AHMAD','ANA','ANGGA','ARDI','ARIF','ARJUN','
 // localStorage HANYA untuk antrian offline (offQ & offAbsenQ)
 // Data MEM tidak disimpan di localStorage — selalu ambil dari Firebase
 // ════════════════════════════════════════════════════════════
-let MEM = {users:[],warga:[],transaksi:[],nominal:2000,seeded:false,kasUmum:[],kasJimpitan:[],rekapEdit:{},absen:[],daftarKelompok:[]};
+let MEM = {users:[],warga:[],transaksi:[],nominal:2000,seeded:false,kasUmum:[],kasJimpitan:[],rekapEdit:{},absen:[],daftarKelompok:[],kegiatan:[]};
 let offQ      = JSON.parse(localStorage.getItem('jmp_q')||'[]');
 let offAbsenQ = JSON.parse(localStorage.getItem('jmp_absen_q')||'[]');
 let isOnline  = navigator.onLine;
@@ -562,6 +562,7 @@ function _normMEM(){
   if(!Array.isArray(MEM.kasJimpitan)) MEM.kasJimpitan=[];
   if(!Array.isArray(MEM.absen))          MEM.absen=[];
   if(!Array.isArray(MEM.daftarKelompok)) MEM.daftarKelompok=[];
+  if(!Array.isArray(MEM.kegiatan))        MEM.kegiatan=[];
   if(!MEM.rekapEdit)                     MEM.rekapEdit={};
 }
 
@@ -575,7 +576,8 @@ function saveMEM(){
       'jmpData/kasUmum':     MEM.kasUmum||[],
       'jmpData/kasJimpitan': MEM.kasJimpitan||[],
       'jmpData/absen':       MEM.absen||[],
-      'jmpData/daftarKelompok': MEM.daftarKelompok||[]
+      'jmpData/daftarKelompok': MEM.daftarKelompok||[],
+      'jmpData/kegiatan':        MEM.kegiatan||[]
     };
     _db.ref().update(updates)
       .then(()=>{ const el=document.getElementById('cstat'); if(el) el.innerHTML='<span class="cdot on"></span>'; })
@@ -986,7 +988,7 @@ function logout(){
 function startApp(){
   document.getElementById('LS').style.display='none';
   document.getElementById('APP').style.display='flex';
-  document.getElementById('brole').textContent={admin:'Admin',divisi:'Divisi',petugas:'Petugas',warga:'Anggota',anggota:'Anggota'}[CU.role]||CU.role;
+  document.getElementById('brole').textContent={admin:'Admin',divisi:'Divisi',petugas:'Petugas',panitia:'Panitia',warga:'Anggota',anggota:'Anggota'}[CU.role]||CU.role;
   document.getElementById('tbs').textContent=CU.name;
   document.getElementById('cstat').innerHTML='<span class="cdot '+(isOnline?'on':'off')+'"></span>';
   updateSyncPill();
@@ -1008,11 +1010,11 @@ function go(page, _fromPop){
   if(!_fromPop){
     history.pushState({page}, '', '#'+page);
   }
-  ({home:pgHome,scan:pgScan,rekap:pgRekap,tunggakan:pgTunggakan,warga:pgWarga,admin:pgAdmin,riwayat:pgRiwayat,riwayatScan:pgRiwayatScan,kas:pgKas,kasUmum:pgKasUmum,kasJimpitan:pgKasJimpitan,rekapJimpitan:pgRekapJimpitan,absen:pgAbsen,absenIsi:pgAbsenIsi,rekapAbsen:pgRekapAbsen,kelolaAkun:pgKelolaAkun,daftarKelompok:pgDaftarKelompok,inputMassal:pgInputMassal})[page]?.();
+  ({home:pgHome,scan:pgScan,rekap:pgRekap,tunggakan:pgTunggakan,warga:pgWarga,admin:pgAdmin,riwayat:pgRiwayat,riwayatScan:pgRiwayatScan,kas:pgKas,kasUmum:pgKasUmum,kasJimpitan:pgKasJimpitan,rekapJimpitan:pgRekapJimpitan,absen:pgAbsen,absenIsi:pgAbsenIsi,rekapAbsen:pgRekapAbsen,kelolaAkun:pgKelolaAkun,daftarKelompok:pgDaftarKelompok,inputMassal:pgInputMassal,kegiatan:pgKegiatan,kegiatanDetail:pgKegiatanDetail})[page]?.();
 }
 
 // Map halaman ke tujuan back
-const _PAGE_BACK={scan:'home',rekap:'home',tunggakan:'home',warga:'home',riwayatScan:'home',riwayat:'home',admin:'home',kas:'home',kasUmum:'kas',kasJimpitan:'kas',rekapJimpitan:'kas',absen:'home',absenIsi:'absen',rekapAbsen:'absen',kelolaAkun:'home',daftarKelompok:'absen',inputMassal:'home'};
+const _PAGE_BACK={scan:'home',rekap:'home',tunggakan:'home',warga:'home',riwayatScan:'home',riwayat:'home',admin:'home',kas:'home',kasUmum:'kas',kasJimpitan:'kas',rekapJimpitan:'kas',absen:'home',absenIsi:'absen',rekapAbsen:'absen',kelolaAkun:'home',daftarKelompok:'absen',inputMassal:'home',kegiatan:'home',kegiatanDetail:'kegiatan'};
 
 // Tangkap tombol back HP / browser
 window.addEventListener('popstate', e=>{
@@ -1048,6 +1050,7 @@ function pgHome(){
   const s1=getRTStats('RT 01'), s2=getRTStats('RT 02');
   const today=new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const isStaff=CU.role==='admin'||CU.role==='divisi'||CU.role==='petugas';
+  const isPanitia=CU.role==='panitia';
 
   let menuHTML='';
   if(isStaff){
@@ -1104,6 +1107,12 @@ function pgHome(){
           <span class="mc-label">Absen</span>
           <span class="mc-sub">Kelola absen</span>
         </div>
+        ${CU.role==='admin'||CU.role==='panitia'?`
+        <div class="menu-card" onclick="go('kegiatan')" style="border-color:#c5b4f0;background:#f5f0ff">
+          <span class="mc-icon">🎪</span>
+          <span class="mc-label" style="color:#5a2d9e">Kegiatan</span>
+          <span class="mc-sub">Iuran & kas kegiatan</span>
+        </div>`:''}
         ${CU.role==='admin'||CU.role==='divisi'?`
         <div class="menu-card" onclick="go('inputMassal')" style="border-color:#a8d8b0;background:#e8f5ec">
           <span class="mc-icon">📥</span>
@@ -1136,6 +1145,17 @@ function pgHome(){
       </div>
       <div class="menu-card" onclick="go('absen')">
         <span class="mc-icon">📝</span><span class="mc-label">Absen</span><span class="mc-sub">Lihat rekap absen</span>
+      </div>
+      <div class="menu-card" onclick="go('kegiatan')" style="border-color:#c5b4f0;background:#f5f0ff">
+        <span class="mc-icon">🎪</span><span class="mc-label" style="color:#5a2d9e">Kegiatan</span><span class="mc-sub">Lihat kegiatan</span>
+      </div>
+    </div>`;
+  } else if(CU.role==='panitia'){
+    menuHTML=`<div class="menu-grid">
+      <div class="menu-card" onclick="go('kegiatan')" style="border-color:#c5b4f0;background:#f5f0ff">
+        <span class="mc-icon">🎪</span>
+        <span class="mc-label" style="color:#5a2d9e">Kegiatan</span>
+        <span class="mc-sub">Kelola kegiatan</span>
       </div>
     </div>`;
   } else {
@@ -1640,7 +1660,7 @@ function buildTunggakan(f){
   document.getElementById('tStats').innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:8px;margin-bottom:8px">
       <div style="padding:8px 12px;background:#e8f5e9;border-radius:10px;border:1.5px solid #b2dfdb">
-        <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">jumlah Tunggakan</div>
+        <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Anggota Menunggak</div>
         <div style="font-size:18px;font-weight:800;color:#1a6b3c">${debtors.length} <span style="font-size:12px;font-weight:600">orang</span></div>
       </div>
       <div style="padding:8px 12px;background:#e8f5e9;border-radius:10px;border:1.5px solid #b2dfdb">
@@ -4148,13 +4168,13 @@ function pgKelolaAkun(){
 }
 
 function _renderKelolaAkun(){
-  const roleIcon={admin:'🔐',divisi:'📋',petugas:'🏃',anggota:'👤'};
-  const roleLabel={admin:'Admin',divisi:'Divisi',petugas:'Petugas',anggota:'Anggota'};
+  const roleIcon={admin:'🔐',divisi:'📋',petugas:'🏃',panitia:'🎪',anggota:'👤'};
+  const roleLabel={admin:'Admin',divisi:'Divisi',petugas:'Petugas',panitia:'Panitia',anggota:'Anggota'};
 
   const daftarHTML=MEM.users
     .filter(u=>u.role!=='warga')
     .sort((a,b)=>{
-      const ord={admin:0,divisi:1,petugas:2,anggota:3};
+      const ord={admin:0,divisi:1,petugas:2,panitia:3,anggota:4};
       return (ord[a.role]??4)-(ord[b.role]??4);
     })
     .map(u=>`
@@ -4188,6 +4208,7 @@ function _renderKelolaAkun(){
         <select id="na_role" class="fi" style="margin-top:5px">
           <option value="divisi">Divisi</option>
           <option value="petugas">Petugas</option>
+          <option value="panitia">Panitia</option>
           <option value="anggota">Anggota</option>
         </select>
       </div>
@@ -4242,6 +4263,462 @@ function doTambahAkun(){
   showToast('✅ Akun '+name+' berhasil ditambahkan!');
   _kaTab='daftar';
   _renderKelolaAkun();
+}
+
+
+// ════════════════════════════════════════════════════════════
+// KEGIATAN
+// ════════════════════════════════════════════════════════════
+let _kgTab='iuran'; // tab aktif di detail kegiatan
+let _kgId=null;     // id kegiatan yang sedang dibuka
+
+function pgKegiatan(){
+  const canEdit=CU.role==='admin'||CU.role==='panitia';
+  const canView=canEdit||CU.role==='anggota';
+  if(!canView){go('home');return;}
+  curPage='kegiatan';
+  if(!Array.isArray(MEM.kegiatan)) MEM.kegiatan=[];
+  _renderDaftarKegiatan();
+}
+
+function _renderDaftarKegiatan(){
+  const canEdit=CU.role==='admin'||CU.role==='panitia';
+  const list=MEM.kegiatan;
+  document.getElementById('MC').innerHTML=`
+    <button class="back-btn" onclick="go('home')">← Beranda</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div class="ct" style="margin:0">🎪 Kegiatan</div>
+      ${canEdit?`<button onclick="_openModalKegiatan(null)"
+        style="padding:8px 14px;background:var(--g);color:#fff;border:none;border-radius:var(--rs);
+        font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer">
+        + Baru
+      </button>`:''}
+    </div>
+    <div id="kgList"></div>`;
+  _buildDaftarKegiatan();
+}
+
+function _buildDaftarKegiatan(){
+  const el=document.getElementById('kgList'); if(!el)return;
+  const canEdit=CU.role==='admin'||CU.role==='panitia';
+  const list=MEM.kegiatan||[];
+  if(!list.length){
+    el.innerHTML='<div class="cd"><div class="empty"><div class="ei">🎪</div>Belum ada kegiatan</div></div>';
+    return;
+  }
+  el.innerHTML=list.map(kg=>{
+    const totalIuran=(kg.iuran||[]).reduce((s,x)=>s+x.nominal,0);
+    const kasRows=_kgKasMerged(kg);
+    const totMasuk=kasRows.reduce((s,r)=>s+(r.masuk||0),0);
+    const totKeluar=kasRows.reduce((s,r)=>s+(r.keluar||0),0);
+    const saldo=totMasuk-totKeluar;
+    return `<div class="cd" style="cursor:pointer;margin-bottom:10px" onclick="_bukaKegiatan('${kg.id}')">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-weight:700;font-size:15px;color:var(--g)">${kg.nama}</div>
+        ${canEdit?`<div style="display:flex;gap:5px" onclick="event.stopPropagation()">
+          <button class="bsm bsm-o" onclick="_openModalKegiatan('${kg.id}')">✏️</button>
+          <button class="bsm bsm-r" onclick="_hapusKegiatan('${kg.id}')">🗑️</button>
+        </div>`:''}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <div style="flex:1;min-width:70px;padding:5px 8px;background:var(--gp);border-radius:7px;border:1px solid var(--gm);text-align:center">
+          <div style="font-size:9px;color:var(--tm);font-weight:700;text-transform:uppercase">Iuran</div>
+          <div style="font-size:11px;font-weight:700;color:var(--g);white-space:nowrap">${rpFmt(totalIuran)}</div>
+        </div>
+        <div style="flex:1;min-width:70px;padding:5px 8px;background:#fff0f0;border-radius:7px;border:1px solid #f5c6c2;text-align:center">
+          <div style="font-size:9px;color:#8a2000;font-weight:700;text-transform:uppercase">Keluar</div>
+          <div style="font-size:11px;font-weight:700;color:var(--red);white-space:nowrap">${rpFmt(totKeluar)}</div>
+        </div>
+        <div style="flex:1;min-width:70px;padding:5px 8px;background:#fffbe6;border-radius:7px;border:1px solid #f0c96e;text-align:center">
+          <div style="font-size:9px;color:#8a6200;font-weight:700;text-transform:uppercase">Saldo</div>
+          <div style="font-size:11px;font-weight:700;color:var(--gold);white-space:nowrap">${rpFmt(saldo)}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _bukaKegiatan(id){
+  _kgId=id;
+  _kgTab='iuran';
+  go('kegiatanDetail');
+}
+
+function pgKegiatanDetail(){
+  const canEdit=CU.role==='admin'||CU.role==='panitia';
+  const canView=canEdit||CU.role==='anggota';
+  if(!canView){go('home');return;}
+  curPage='kegiatanDetail';
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId);
+  if(!kg){go('kegiatan');return;}
+  document.getElementById('MC').innerHTML=`
+    <button class="back-btn" onclick="go('kegiatan')">← Kegiatan</button>
+    <div class="ct">🎪 ${kg.nama}</div>
+    ${kg.nominalDefault?`<div style="font-size:11px;color:var(--tl);margin-bottom:10px">Nominal default: <b>${rpFmt(kg.nominalDefault)}</b></div>`:''}
+    <div style="display:flex;gap:0;margin-bottom:14px;border:1.5px solid var(--b);border-radius:var(--rs);overflow:hidden">
+      <button onclick="_kgTab='iuran';pgKegiatanDetail()"
+        style="flex:1;padding:10px;border:none;font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;
+        background:${_kgTab==='iuran'?'var(--g)':'#fff'};color:${_kgTab==='iuran'?'#fff':'var(--tm)'}">
+        💰 Iuran
+      </button>
+      <button onclick="_kgTab='kas';pgKegiatanDetail()"
+        style="flex:1;padding:10px;border:none;border-left:1.5px solid var(--b);font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;
+        background:${_kgTab==='kas'?'var(--g)':'#fff'};color:${_kgTab==='kas'?'#fff':'var(--tm)'}">
+        📒 Kas
+      </button>
+    </div>
+    <div id="kgDetailContent"></div>`;
+  if(_kgTab==='iuran') _renderKgIuran();
+  else _renderKgKas();
+}
+
+// ── TAB IURAN ─────────────────────────────────────────────────
+function _renderKgIuran(){
+  const el=document.getElementById('kgDetailContent'); if(!el)return;
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const canEdit=CU.role==='admin'||CU.role==='panitia';
+  const iuranList=kg.iuran||[];
+  const total=iuranList.reduce((s,x)=>s+x.nominal,0);
+
+  let html='';
+  if(canEdit){
+    html+=`<div class="cd" style="margin-bottom:10px;padding:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--g);margin-bottom:8px">➕ Tambah Iuran</div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:6px;margin-bottom:6px">
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Nama</label>
+          <input id="ki_nama" class="fi" type="text" placeholder="Nama..." style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Nominal (Rp)</label>
+          <input id="ki_nom" class="fi" type="number" min="0" placeholder="${kg.nominalDefault||0}" value="${kg.nominalDefault||''}" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+      </div>
+      <button onclick="_tambahKgIuran()"
+        style="width:100%;padding:8px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:10px;
+        font-family:'Plus Jakarta Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer">
+        💾 Simpan
+      </button>
+    </div>`;
+  }
+
+  html+=`<div class="cd">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div style="font-size:12px;font-weight:700;color:var(--tm)">${iuranList.length} peserta</div>
+      <div style="font-size:12px;font-weight:700;color:var(--g);white-space:nowrap">Total: ${rpFmt(total)}</div>
+    </div>`;
+
+  if(!iuranList.length){
+    html+='<div class="empty"><div class="ei">💰</div>Belum ada iuran</div>';
+  } else {
+    html+=iuranList.map((x,i)=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--b);${i===iuranList.length-1?'border-bottom:none':''}">
+        <div style="flex:1">
+          <div style="font-weight:600;font-size:13px;color:var(--t)">${x.nama}</div>
+          <div style="font-size:11px;color:var(--g);font-weight:700;white-space:nowrap">${rpFmt(x.nominal)}</div>
+        </div>
+        ${canEdit?`<div style="display:flex;gap:4px">
+          <button class="bsm bsm-o" onclick="_editKgIuran('${x.id}')">✏️</button>
+          <button class="bsm bsm-r" onclick="_hapusKgIuran('${x.id}')">🗑️</button>
+        </div>`:''}
+      </div>`).join('');
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+function _tambahKgIuran(){
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const nama=document.getElementById('ki_nama').value.trim();
+  const nominal=parseInt(document.getElementById('ki_nom').value)||0;
+  if(!nama){showToast('❌ Nama wajib diisi');return;}
+  if(!kg.iuran) kg.iuran=[];
+  kg.iuran.push({id:'KI'+Date.now(),nama,nominal});
+  _syncKgIuranToKas(kg);
+  saveMEM();
+  showToast('✅ Iuran ditambahkan!');
+  document.getElementById('ki_nama').value='';
+  document.getElementById('ki_nom').value=kg.nominalDefault||'';
+  _renderKgIuran();
+}
+
+function _editKgIuran(iid){
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const item=kg.iuran.find(x=>x.id===iid); if(!item)return;
+  const ex=document.getElementById('_kgIuranEditModal');
+  if(ex) ex.remove();
+  const modal=document.createElement('div');
+  modal.id='_kgIuranEditModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML=`
+    <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <div style="font-weight:700;font-size:16px;color:var(--g);margin-bottom:16px">✏️ Edit Iuran</div>
+      <div class="fg"><label>Nama</label><input id="_kie_nama" class="fi" type="text" value="${item.nama}" style="margin-top:5px"></div>
+      <div class="fg" style="margin-top:10px"><label>Nominal (Rp)</label><input id="_kie_nom" class="fi" type="number" min="0" value="${item.nominal}" style="margin-top:5px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+        <button onclick="document.getElementById('_kgIuranEditModal').remove()"
+          style="padding:12px;background:#f0f0f0;border:none;border-radius:10px;font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;color:#666">
+          ✕ Batal
+        </button>
+        <button onclick="_simpanEditKgIuran('${iid}')"
+          style="padding:12px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:10px;
+          font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer">
+          💾 Simpan
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function _simpanEditKgIuran(iid){
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const item=kg.iuran.find(x=>x.id===iid); if(!item)return;
+  const nama=document.getElementById('_kie_nama').value.trim();
+  const nominal=parseInt(document.getElementById('_kie_nom').value)||0;
+  if(!nama){showToast('❌ Nama wajib diisi');return;}
+  item.nama=nama; item.nominal=nominal;
+  _syncKgIuranToKas(kg);
+  saveMEM();
+  document.getElementById('_kgIuranEditModal').remove();
+  showToast('✅ Iuran diperbarui!');
+  _renderKgIuran();
+}
+
+function _hapusKgIuran(iid){
+  if(!confirm('Hapus iuran ini?'))return;
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  kg.iuran=(kg.iuran||[]).filter(x=>x.id!==iid);
+  _syncKgIuranToKas(kg);
+  saveMEM();
+  showToast('🗑️ Iuran dihapus');
+  _renderKgIuran();
+}
+
+// ── SINKRON IURAN → KAS (1 baris otomatis) ───────────────────
+function _syncKgIuranToKas(kg){
+  if(!kg.kas) kg.kas=[];
+  const total=(kg.iuran||[]).reduce((s,x)=>s+x.nominal,0);
+  const AUTO_ID='KAS_IURAN_AUTO';
+  const existing=kg.kas.find(x=>x.id===AUTO_ID);
+  if(existing){
+    existing.masuk=total;
+    existing.ket='Total Iuran (otomatis)';
+  } else {
+    kg.kas.unshift({id:AUTO_ID,tgl:new Date().toISOString().slice(0,10),ket:'Total Iuran (otomatis)',masuk:total,keluar:0,auto:true});
+  }
+}
+
+function _kgKasMerged(kg){
+  if(!kg.kas) return [];
+  return [...kg.kas].sort((a,b)=>a.tgl.localeCompare(b.tgl));
+}
+
+// ── TAB KAS ───────────────────────────────────────────────────
+function _renderKgKas(){
+  const el=document.getElementById('kgDetailContent'); if(!el)return;
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const canEdit=CU.role==='admin'||CU.role==='panitia';
+  if(!kg.kas) kg.kas=[];
+  _syncKgIuranToKas(kg);
+
+  let html='';
+  if(canEdit){
+    html+=`<div class="cd" style="margin-bottom:10px;padding:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--g);margin-bottom:8px">➕ Tambah Entri Kas</div>
+      <div style="display:grid;grid-template-columns:1fr 2fr;gap:6px;margin-bottom:6px">
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Tanggal</label>
+          <input id="kk_tgl" class="fi" type="date" value="${new Date().toISOString().slice(0,10)}" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Keterangan</label>
+          <input id="kk_ket" class="fi" type="text" placeholder="Keterangan..." style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:end">
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Pemasukan (Rp)</label>
+          <input id="kk_masuk" class="fi" type="number" min="0" placeholder="0" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <div><label style="font-size:10px;font-weight:600;color:var(--tl)">Pengeluaran (Rp)</label>
+          <input id="kk_keluar" class="fi" type="number" min="0" placeholder="0" style="padding:5px 8px;font-size:12px;margin-top:2px"></div>
+        <button onclick="_tambahKgKas()"
+          style="padding:7px 12px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:10px;
+          font-family:'Plus Jakarta Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap">
+          💾 Simpan
+        </button>
+      </div>
+    </div>`;
+  }
+
+  const rows=_hitungSaldo(_kgKasMerged(kg));
+  const totMasuk=rows.reduce((s,r)=>s+(r.masuk||0),0);
+  const totKeluar=rows.reduce((s,r)=>s+(r.keluar||0),0);
+  const saldo=totMasuk-totKeluar;
+
+  html+=`<div class="cd">
+    <div style="display:flex;gap:6px;margin-bottom:10px">
+      <div style="flex:1;padding:6px 8px;background:#e8f5e9;border-radius:8px;text-align:center">
+        <div style="font-size:9px;color:var(--tl);font-weight:600;text-transform:uppercase">Masuk</div>
+        <div style="font-size:11px;font-weight:700;color:var(--g);white-space:nowrap">${rpFmt(totMasuk)}</div>
+      </div>
+      <div style="flex:1;padding:6px 8px;background:#fff0f0;border-radius:8px;text-align:center">
+        <div style="font-size:9px;color:var(--tl);font-weight:600;text-transform:uppercase">Keluar</div>
+        <div style="font-size:11px;font-weight:700;color:var(--red);white-space:nowrap">${rpFmt(totKeluar)}</div>
+      </div>
+      <div style="flex:1;padding:6px 8px;background:#fffbe6;border-radius:8px;text-align:center">
+        <div style="font-size:9px;color:var(--tl);font-weight:600;text-transform:uppercase">Saldo</div>
+        <div style="font-size:11px;font-weight:700;color:var(--gold);white-space:nowrap">${rpFmt(saldo)}</div>
+      </div>
+    </div>`;
+
+  if(!rows.length){
+    html+='<div class="empty"><div class="ei">📒</div>Belum ada transaksi</div>';
+  } else {
+    html+=`<div class="tscroll"><table class="rtbl" style="font-size:11px">
+      <tr><th style="width:55px">Tanggal</th><th>Keterangan</th><th style="width:75px">Masuk</th><th style="width:75px">Keluar</th><th style="width:75px">Saldo</th><th></th></tr>
+      ${rows.map((r,i)=>`<tr style="${i%2?'background:#f7fbf8':''}">
+        <td style="white-space:nowrap">${new Date(r.tgl+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'2-digit'})}</td>
+        <td style="white-space:nowrap">${r.ket}${r.auto?' 🔒':''}</td>
+        <td style="color:var(--g);text-align:right;white-space:nowrap">${r.masuk?rpFmt(r.masuk):'-'}</td>
+        <td style="color:var(--red);text-align:right;white-space:nowrap">${r.keluar?rpFmt(r.keluar):'-'}</td>
+        <td style="font-weight:700;text-align:right;white-space:nowrap">${rpFmt(r.saldo)}</td>
+        <td style="white-space:nowrap">${canEdit&&!r.auto?`<div style="display:flex;gap:3px">
+          <button class="bsm bsm-o" onclick="_editKgKas('${r.id}')">✏️</button>
+          <button class="bsm bsm-r" onclick="_hapusKgKas('${r.id}')">🗑️</button>
+        </div>`:''}
+        </td>
+      </tr>`).join('')}
+    </table></div>`;
+  }
+  html+='</div>';
+  el.innerHTML=html;
+}
+
+function _tambahKgKas(){
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const tgl=document.getElementById('kk_tgl').value;
+  const ket=document.getElementById('kk_ket').value.trim();
+  const masuk=parseInt(document.getElementById('kk_masuk').value)||0;
+  const keluar=parseInt(document.getElementById('kk_keluar').value)||0;
+  if(!tgl||!ket){showToast('❌ Tanggal & keterangan wajib diisi');return;}
+  if(!masuk&&!keluar){showToast('❌ Isi pemasukan atau pengeluaran');return;}
+  if(!kg.kas) kg.kas=[];
+  kg.kas.push({id:'KK'+Date.now(),tgl,ket,masuk,keluar,auto:false});
+  saveMEM();
+  showToast('✅ Entri kas ditambahkan!');
+  document.getElementById('kk_ket').value='';
+  document.getElementById('kk_masuk').value='';
+  document.getElementById('kk_keluar').value='';
+  _renderKgKas();
+}
+
+function _editKgKas(kid){
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const r=(kg.kas||[]).find(x=>x.id===kid); if(!r||r.auto)return;
+  const ex=document.getElementById('_kgKasEditModal');
+  if(ex) ex.remove();
+  const modal=document.createElement('div');
+  modal.id='_kgKasEditModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  modal.innerHTML=`
+    <div style="background:#fff;border-radius:16px;padding:24px;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,.2)">
+      <div style="font-weight:700;font-size:16px;color:var(--g);margin-bottom:16px">✏️ Edit Entri Kas</div>
+      <div class="fg"><label>Tanggal</label><input id="_kke_tgl" class="fi" type="date" value="${r.tgl}" style="margin-top:5px"></div>
+      <div class="fg" style="margin-top:10px"><label>Keterangan</label><input id="_kke_ket" class="fi" type="text" value="${r.ket}" style="margin-top:5px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+        <div class="fg"><label>Pemasukan</label><input id="_kke_masuk" class="fi" type="number" min="0" value="${r.masuk||0}" style="margin-top:5px"></div>
+        <div class="fg"><label>Pengeluaran</label><input id="_kke_keluar" class="fi" type="number" min="0" value="${r.keluar||0}" style="margin-top:5px"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px">
+        <button onclick="document.getElementById('_kgKasEditModal').remove()"
+          style="padding:12px;background:#f0f0f0;border:none;border-radius:10px;font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;color:#666">
+          ✕ Batal
+        </button>
+        <button onclick="_simpanEditKgKas('${kid}')"
+          style="padding:12px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:10px;
+          font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer">
+          💾 Simpan
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function _simpanEditKgKas(kid){
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  const r=(kg.kas||[]).find(x=>x.id===kid); if(!r)return;
+  const tgl=document.getElementById('_kke_tgl').value;
+  const ket=document.getElementById('_kke_ket').value.trim();
+  const masuk=parseInt(document.getElementById('_kke_masuk').value)||0;
+  const keluar=parseInt(document.getElementById('_kke_keluar').value)||0;
+  if(!tgl||!ket){showToast('❌ Tanggal & keterangan wajib diisi');return;}
+  if(!masuk&&!keluar){showToast('❌ Isi pemasukan atau pengeluaran');return;}
+  r.tgl=tgl; r.ket=ket; r.masuk=masuk; r.keluar=keluar;
+  saveMEM();
+  document.getElementById('_kgKasEditModal').remove();
+  showToast('✅ Entri diperbarui!');
+  _renderKgKas();
+}
+
+function _hapusKgKas(kid){
+  if(!confirm('Hapus entri kas ini?'))return;
+  const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
+  kg.kas=(kg.kas||[]).filter(x=>x.id!==kid);
+  saveMEM();
+  showToast('🗑️ Entri dihapus');
+  _renderKgKas();
+}
+
+// ── MODAL BUAT/EDIT KEGIATAN ──────────────────────────────────
+function _openModalKegiatan(id){
+  const kg=id?MEM.kegiatan.find(x=>x.id===id):null;
+  const ex=document.getElementById('_kgModal');
+  if(ex) ex.remove();
+  const modal=document.createElement('div');
+  modal.id='_kgModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  modal.innerHTML=`
+    <div style="background:#fff;border-radius:22px 22px 0 0;padding:24px 20px 32px;width:100%;max-width:480px;box-shadow:0 -4px 24px rgba(0,0,0,.15)">
+      <div style="font-weight:700;font-size:18px;color:var(--g);margin-bottom:18px">${kg?'✏️ Edit Kegiatan':'➕ Kegiatan Baru'}</div>
+      <div class="fg">
+        <label>Nama Kegiatan</label>
+        <input id="_kg_nama" class="fi" type="text" placeholder="cth: Agustus 2026, Idul Adha..." value="${kg?kg.nama:''}" style="margin-top:5px">
+      </div>
+      <div class="fg" style="margin-top:12px">
+        <label>Nominal Default (Rp) — boleh kosong</label>
+        <input id="_kg_nom" class="fi" type="number" min="0" placeholder="Kosongkan jika tidak ada" value="${kg&&kg.nominalDefault?kg.nominalDefault:''}" style="margin-top:5px">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px">
+        <button onclick="document.getElementById('_kgModal').remove()"
+          style="padding:12px;background:#f0f0f0;border:none;border-radius:10px;font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;color:#666">
+          ✕ Batal
+        </button>
+        <button onclick="_simpanKegiatan('${id||''}')"
+          style="padding:12px;background:linear-gradient(135deg,var(--g),var(--gl));color:#fff;border:none;border-radius:10px;
+          font-family:'Plus Jakarta Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;
+          box-shadow:0 4px 12px rgba(26,107,60,.35)">
+          💾 Simpan
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function _simpanKegiatan(id){
+  const nama=document.getElementById('_kg_nama').value.trim();
+  const nominalDefault=parseInt(document.getElementById('_kg_nom').value)||0;
+  if(!nama){showToast('❌ Nama kegiatan wajib diisi');return;}
+  if(!Array.isArray(MEM.kegiatan)) MEM.kegiatan=[];
+  if(id){
+    const kg=MEM.kegiatan.find(x=>x.id===id);
+    if(kg){ kg.nama=nama; kg.nominalDefault=nominalDefault; }
+  } else {
+    MEM.kegiatan.push({id:'KG'+Date.now(),nama,nominalDefault,iuran:[],kas:[]});
+  }
+  saveMEM();
+  document.getElementById('_kgModal').remove();
+  showToast(id?'✅ Kegiatan diperbarui!':'✅ Kegiatan berhasil dibuat!');
+  _renderDaftarKegiatan();
+}
+
+function _hapusKegiatan(id){
+  const kg=MEM.kegiatan.find(x=>x.id===id);
+  if(!confirm('Hapus kegiatan "'+kg.nama+'"?\nSemua data iuran & kas akan ikut terhapus.'))return;
+  MEM.kegiatan=MEM.kegiatan.filter(x=>x.id!==id);
+  saveMEM();
+  showToast('🗑️ Kegiatan dihapus');
+  _renderDaftarKegiatan();
 }
 
 </script>
