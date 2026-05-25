@@ -1156,22 +1156,22 @@ function pgHome(){
     </div>
     ${isStaff||CU.role==='anggota'?`<div class="cd" style="margin-bottom:12px">
       <div class="ct">📍 Status pembayaran</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
         ${[['RT 01',s1],['RT 02',s2]].map(([rt,s])=>`
-        <div style="background:var(--w);border-radius:10px;padding:10px;border:1px solid var(--b)">
-          <div style="font-weight:700;color:var(--g);font-size:13px;margin-bottom:7px;text-align:center">${rt}</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px">
-            <div style="background:var(--gp);border-radius:7px;padding:7px 5px;border:1px solid var(--gm);text-align:center">
-              <div style="font-size:9px;font-weight:700;color:var(--tm);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">Uang Masuk</div>
-              <div style="font-size:11px;font-weight:700;color:var(--g);font-family:'JetBrains Mono',monospace;line-height:1.2">${rpFmt(s.totalRp)}</div>
+        <div style="background:var(--w);border-radius:8px;padding:7px;border:1px solid var(--b)">
+          <div style="font-weight:700;color:var(--g);font-size:11px;margin-bottom:6px;text-align:center">${rt}</div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <div style="background:var(--gp);border-radius:5px;padding:5px 7px;border:1px solid var(--gm);display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:9px;font-weight:700;color:var(--tm);text-transform:uppercase">Masuk</span>
+              <span style="font-size:10px;font-weight:700;color:var(--g);font-family:'JetBrains Mono',monospace">${rpFmt(s.totalRp)}</span>
             </div>
-            <div style="background:#fef9ec;border-radius:7px;padding:7px 5px;border:1px solid #f0c96e;text-align:center">
-              <div style="font-size:9px;font-weight:700;color:#8a6200;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">Tunggakan</div>
-              <div style="font-size:11px;font-weight:700;color:var(--gold);font-family:'JetBrains Mono',monospace;line-height:1.2">${rpFmt(s.debtRp)}</div>
+            <div style="background:#fef9ec;border-radius:5px;padding:5px 7px;border:1px solid #f0c96e;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:9px;font-weight:700;color:#8a6200;text-transform:uppercase">Kurang</span>
+              <span style="font-size:10px;font-weight:700;color:var(--gold);font-family:'JetBrains Mono',monospace">${rpFmt(s.debtRp)}</span>
             </div>
-            <div style="background:var(--rl);border-radius:7px;padding:7px 5px;border:1px solid #f5c6c2;text-align:center">
-              <div style="font-size:9px;font-weight:700;color:#8a2000;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">Menunggak</div>
-              <div style="font-size:11px;font-weight:700;color:var(--red);font-family:'JetBrains Mono',monospace;line-height:1.2">${s.debtCount} org</div>
+            <div style="background:var(--rl);border-radius:5px;padding:5px 7px;border:1px solid #f5c6c2;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:9px;font-weight:700;color:#8a2000;text-transform:uppercase">Nunggak</span>
+              <span style="font-size:10px;font-weight:700;color:var(--red);font-family:'JetBrains Mono',monospace">${s.debtCount} org</span>
             </div>
           </div>
         </div>`).join('')}
@@ -1638,14 +1638,14 @@ function buildTunggakan(f){
     .filter(w=>w.dw.length>0).sort((a,b)=>b.dw.length-a.dw.length);
   const totalDebt=debtors.reduce((s,w)=>s+w.dr,0);
   document.getElementById('tStats').innerHTML=`
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+    <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:8px;margin-bottom:8px">
       <div style="padding:8px 12px;background:#e8f5e9;border-radius:10px;border:1.5px solid #b2dfdb">
-        <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Anggota Menunggak</div>
+        <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">jumlah Tunggakan</div>
         <div style="font-size:18px;font-weight:800;color:#1a6b3c">${debtors.length} <span style="font-size:12px;font-weight:600">orang</span></div>
       </div>
       <div style="padding:8px 12px;background:#e8f5e9;border-radius:10px;border:1.5px solid #b2dfdb">
         <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Total Tunggakan</div>
-        <div style="font-size:15px;font-weight:800;color:#1a6b3c;font-family:'JetBrains Mono',monospace">${rpFmt(totalDebt)}</div>
+        <div style="font-size:15px;font-weight:800;color:#1a6b3c;font-family:'JetBrains Mono',monospace;white-space:nowrap">${rpFmt(totalDebt)}</div>
       </div>
     </div>`;
   const el=document.getElementById('tList'); if(!el)return;
