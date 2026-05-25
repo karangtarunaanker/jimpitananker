@@ -916,13 +916,22 @@ function allocatePayment(wid, amount){
   return allocs;
 }
 
+function prevWeekKey(){
+  const now=new Date();
+  const prev=new Date(now);
+  prev.setDate(now.getDate()-7);
+  return weekKey(prev);
+}
 function getRTStats(rt){
   const warga=MEM.warga.filter(w=>rt==='all'||w.rt===rt);
   const week=thisWeek();
+  const pw=prevWeekKey();
   const paid=warga.filter(w=>MEM.transaksi.some(t=>t.wargaId===w.id&&t.weekKey===week&&!t.isCredit));
   const totalRp=MEM.transaksi.filter(t=>warga.some(w=>w.id===t.wargaId)&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
+  const prevWeekRp=MEM.transaksi.filter(t=>warga.some(w=>w.id===t.wargaId)&&t.weekKey===pw&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
   const debtCount=warga.filter(w=>debtWeeks(w.id).length>0).length;
-  return{total:warga.length,paid:paid.length,unpaid:warga.length-paid.length,totalRp,debtCount};
+  const debtRp=warga.reduce((s,w)=>s+debtWeeks(w.id).length*MEM.nominal,0);
+  return{total:warga.length,paid:paid.length,unpaid:warga.length-paid.length,totalRp,prevWeekRp,debtCount,debtRp};
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1142,16 +1151,29 @@ function pgHome(){
       <p>${today}</p>
     </div>
     <div class="sg">
-      <div class="sb"><div class="sl">Total Uang Masuk</div><div class="sv gold">${rpFmt(all.totalRp)}</div></div>
-      <div class="sb"><div class="sl">Jumlah Anggota Bayar</div><div class="sv">${all.paid}/${all.total}</div></div>
+      <div class="sb" style="text-align:center"><div class="sl">Total Uang Masuk</div><div class="sv gold">${rpFmt(all.totalRp)}</div></div>
+      <div class="sb" style="text-align:center"><div class="sl">Masuk Minggu Lalu</div><div class="sv">${rpFmt(all.prevWeekRp)}</div></div>
     </div>
     ${isStaff||CU.role==='anggota'?`<div class="cd" style="margin-bottom:12px">
       <div class="ct">📍 Status pembayaran</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">
-        ${[['RT 01',s1],['RT 02',s2]].map(([rt,s])=>`<div style="background:var(--gp);border-radius:9px;padding:12px;border:1px solid var(--gm)">
-          <div style="font-weight:700;color:var(--g);font-size:13px">${rt}</div>
-          <div style="font-size:11px;color:var(--tm);margin-top:3px">Bayar ${s.paid} · Belum ${s.unpaid} · Telat ${s.debtCount}</div>
-          <div style="font-size:12px;color:var(--gold);font-weight:700;margin-top:3px">${rpFmt(s.totalRp)}</div>
+        ${[['RT 01',s1],['RT 02',s2]].map(([rt,s])=>`
+        <div style="background:var(--w);border-radius:10px;padding:10px;border:1px solid var(--b)">
+          <div style="font-weight:700;color:var(--g);font-size:13px;margin-bottom:7px;text-align:center">${rt}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px">
+            <div style="background:var(--gp);border-radius:7px;padding:7px 5px;border:1px solid var(--gm);text-align:center">
+              <div style="font-size:9px;font-weight:700;color:var(--tm);text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">Uang Masuk</div>
+              <div style="font-size:11px;font-weight:700;color:var(--g);font-family:'JetBrains Mono',monospace;line-height:1.2">${rpFmt(s.totalRp)}</div>
+            </div>
+            <div style="background:#fef9ec;border-radius:7px;padding:7px 5px;border:1px solid #f0c96e;text-align:center">
+              <div style="font-size:9px;font-weight:700;color:#8a6200;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">Tunggakan</div>
+              <div style="font-size:11px;font-weight:700;color:var(--gold);font-family:'JetBrains Mono',monospace;line-height:1.2">${rpFmt(s.debtRp)}</div>
+            </div>
+            <div style="background:var(--rl);border-radius:7px;padding:7px 5px;border:1px solid #f5c6c2;text-align:center">
+              <div style="font-size:9px;font-weight:700;color:#8a2000;text-transform:uppercase;letter-spacing:.3px;margin-bottom:3px">Menunggak</div>
+              <div style="font-size:11px;font-weight:700;color:var(--red);font-family:'JetBrains Mono',monospace;line-height:1.2">${s.debtCount} org</div>
+            </div>
+          </div>
         </div>`).join('')}
       </div>
     </div>`:''}
@@ -1392,19 +1414,82 @@ async function doConfirm(){
 
 // ── REKAP ────────────────────────────────────────────────────
 let rRT='RT 01', rMon=new Date().getMonth(), rYear=new Date().getFullYear();
+function _getRbulanTahunMap(){
+  // Kumpulkan bulan+tahun yang ada transaksi !isCredit dari weekKey
+  const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const set=new Set();
+  MEM.transaksi.forEach(t=>{
+    if(t.isCredit) return;
+    // Coba dari weekKey dulu (format "YYYY-Wn-m")
+    if(t.weekKey){
+      const parts=t.weekKey.split('-');
+      if(parts.length===3){
+        const y=parseInt(parts[0]), m=parseInt(parts[2]);
+        if(!isNaN(y)&&!isNaN(m)) set.add(y+'-'+m);
+        return;
+      }
+    }
+    // Fallback dari date
+    const d=new Date(t.date);
+    if(!isNaN(d)) set.add(d.getFullYear()+'-'+d.getMonth());
+  });
+  const list=[...set].sort((a,b)=>b.localeCompare(a));
+  const tahunMap={};
+  list.forEach(b=>{
+    const [y,m]=b.split('-').map(Number);
+    if(!tahunMap[y]) tahunMap[y]=[];
+    tahunMap[y].push({b,m});
+  });
+  return tahunMap;
+}
 function pgRekap(){
   if(CU.role!=='admin'&&CU.role!=='divisi'&&CU.role!=='anggota'){go('home');return;}
   curPage='rekap';
-  const months=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const tahunMap=_getRbulanTahunMap();
+  const tahunList=Object.keys(tahunMap).map(Number).sort((a,b)=>b-a);
+
+  // Jika tidak ada data sama sekali
+  if(!tahunList.length){
+    document.getElementById('MC').innerHTML=`
+      <button class="back-btn" onclick="go('home')">← Beranda</button>
+      <div class="ct">📊 Rekap Iuran</div>
+      <div class="cd"><div class="empty"><div class="ei">📭</div>Belum ada data transaksi</div></div>`;
+    return;
+  }
+
+  // Validasi rYear & rMon — pastikan masih ada di data
+  if(!tahunMap[rYear]){
+    rYear=tahunList[0];
+    rMon=tahunMap[rYear][0].m;
+  } else if(!tahunMap[rYear].find(x=>x.m===rMon)){
+    rMon=tahunMap[rYear][0].m;
+  }
+
+  const bulanTahunIni=tahunMap[rYear]||[];
+
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('home')">← Beranda</button>
     <div class="ct">📊 Rekap Iuran</div>
     <div class="fr">
       <button class="fp ${rRT==='RT 01'?'active':''}" onclick="rRT='RT 01';buildRekap()">RT 01</button>
       <button class="fp ${rRT==='RT 02'?'active':''}" onclick="rRT='RT 02';buildRekap()">RT 02</button>
-      <select class="fsel" onchange="rMon=parseInt(this.value);buildRekap()">
-        ${months.map((m,i)=>`<option value="${i}" ${i===rMon?'selected':''}>${m}</option>`).join('')}
-      </select>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:12px;align-items:end">
+      <div>
+        <div style="font-size:11px;color:var(--tl);margin-bottom:3px;font-weight:600;text-transform:uppercase">Tahun</div>
+        <select class="fi" style="padding:8px 10px;font-size:14px;font-weight:700;color:var(--g)"
+          onchange="rYear=parseInt(this.value);rMon=_getRbulanTahunMap()[rYear][0].m;pgRekap()">
+          ${tahunList.map(y=>`<option value="${y}" ${rYear===y?'selected':''}>${y}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <div style="font-size:11px;color:var(--tl);margin-bottom:3px;font-weight:600;text-transform:uppercase">Bulan</div>
+        <select class="fi" style="padding:8px 10px;font-size:14px;font-weight:700;color:var(--g)"
+          onchange="rMon=parseInt(this.value);buildRekap()">
+          ${bulanTahunIni.map(({m})=>`<option value="${m}" ${rMon===m?'selected':''}>${mn[m]}</option>`).join('')}
+        </select>
+      </div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px">
       <button class="fp active" style="flex:1" onclick="exportExcel()">📥 Export Excel</button>
@@ -1457,6 +1542,7 @@ function buildRekap(){
 // ── EXPORT EXCEL ─────────────────────────────────────────────
 function exportExcel(){
   const months=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  // rMon & rYear sudah mengikuti pilihan aktif di pgRekap
   const wb = XLSX.utils.book_new();
 
   ['RT 01','RT 02'].forEach(rt=>{
@@ -2503,6 +2589,17 @@ function pgAdmin(){
       ${offQ.length>0?`<button style="margin-top:8px;padding:9px 16px;background:var(--gold);color:#fff;border:none;border-radius:var(--rs);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;cursor:pointer;font-size:13px" onclick="trySyncQ()">📤 Sync Sekarang</button>`:''}
     </div>
     <div class="cd">
+      <div class="sec">🔧 Koreksi Data Input Massal</div>
+      <p style="font-size:12px;color:var(--tm);margin-bottom:10px;line-height:1.6">
+        Perbaiki tanggal transaksi yang diinput lewat fitur Input Massal — tanggal akan disesuaikan ke tanggal tengah minggu yang sesuai dengan weekKey-nya (bukan tanggal hari input).
+      </p>
+      <div id="_koreksiInfo" style="font-size:12px;color:var(--tl);margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="_cekDataMassal()" style="padding:9px 16px;background:var(--gp);color:var(--g);border:1.5px solid var(--gl);border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🔍 Cek Data</button>
+        <button onclick="_koreksiDataMassal()" id="_btnKoreksi" style="padding:9px 16px;background:#1a3a5c;color:#fff;border:none;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:none">✅ Koreksi Sekarang</button>
+      </div>
+    </div>
+    <div class="cd">
       <div class="sec" style="color:var(--red)">⚠️ Zona Bahaya</div>
       <p style="font-size:12px;color:var(--tm);margin-bottom:10px">Hapus antrian offline yang belum tersinkronisasi.</p>
       <button onclick="clearOffQ()" style="background:var(--red);color:#fff;border:none;padding:10px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🗑️ Hapus Antrian Offline</button>
@@ -2547,6 +2644,66 @@ function saveEditUser(){
 function clearOffQ(){
   if(!confirm('Hapus semua antrian offline?'))return;
   offQ=[]; saveQ(); updateSyncPill(); showToast('🗑️ Antrian dihapus'); pgAdmin();
+}
+
+function _cekDataMassal(){
+  // Cari transaksi isMassal yang tanggalnya tidak sesuai weekKey-nya
+  const salah=MEM.transaksi.filter(t=>{
+    if(!t.isMassal||t.isCredit||!t.weekKey||t.weekKey==='KREDIT') return false;
+    const [y,wn,m]=t.weekKey.split('-');
+    const minggu=parseInt(wn.replace('W',''));
+    const tglMulai=(minggu-1)*7+1;
+    const tglAkhir=Math.min(minggu*7, new Date(+y,+m+1,0).getDate());
+    const tDate=new Date(t.date);
+    const tMonth=tDate.getMonth(), tYear=tDate.getFullYear(), tTgl=tDate.getDate();
+    // Cek apakah tanggal transaksi masuk dalam bulan & rentang minggu yang benar
+    return !(tYear===+y && tMonth===+m && tTgl>=tglMulai && tTgl<=tglAkhir);
+  });
+
+  const el=document.getElementById('_koreksiInfo');
+  const btn=document.getElementById('_btnKoreksi');
+  if(!el)return;
+
+  if(salah.length===0){
+    el.innerHTML='<span style="color:var(--g);font-weight:700">✅ Semua data sudah benar, tidak perlu koreksi.</span>';
+    if(btn) btn.style.display='none';
+  } else {
+    el.innerHTML=`<span style="color:var(--red);font-weight:700">⚠️ Ditemukan ${salah.length} transaksi dengan tanggal tidak sesuai minggu.</span><br>
+      <span style="color:var(--tm)">Contoh: weekKey "${salah[0].weekKey}" tapi tanggal tercatat ${new Date(salah[0].date).toLocaleDateString('id-ID')}.</span>`;
+    if(btn) btn.style.display='inline-block';
+  }
+}
+
+function _koreksiDataMassal(){
+  let fixed=0;
+  MEM.transaksi.forEach(t=>{
+    if(!t.isMassal||t.isCredit||!t.weekKey||t.weekKey==='KREDIT') return;
+    const [y,wn,m]=t.weekKey.split('-');
+    const minggu=parseInt(wn.replace('W',''));
+    const tglMulai=(minggu-1)*7+1;
+    const tglAkhir=Math.min(minggu*7, new Date(+y,+m+1,0).getDate());
+    const tDate=new Date(t.date);
+    const tMonth=tDate.getMonth(), tYear=tDate.getFullYear(), tTgl=tDate.getDate();
+    const sudahBenar=tYear===+y && tMonth===+m && tTgl>=tglMulai && tTgl<=tglAkhir;
+    if(!sudahBenar){
+      // Koreksi: set ke tanggal tengah minggu yang sesuai
+      t.date=_weekKeyToDate(t.weekKey).toISOString();
+      fixed++;
+    }
+  });
+
+  if(fixed===0){
+    showToast('✅ Tidak ada yang perlu dikoreksi');
+    return;
+  }
+
+  if(isOnline){
+    saveTrx();
+    showToast(`✅ ${fixed} transaksi berhasil dikoreksi!`);
+  } else {
+    showToast(`⚠️ ${fixed} dikoreksi lokal — sync dulu agar tersimpan ke server`);
+  }
+  _cekDataMassal(); // refresh info
 }
 
 // ── RIWAYAT WARGA ────────────────────────────────────────────
@@ -3925,11 +4082,21 @@ function _imStep3(){
     </button>`;
 }
 
+function _weekKeyToDate(k){
+  // Ambil tanggal representatif dari weekKey: hari Rabu (tengah minggu) di minggu tsb
+  // Format weekKey: "YYYY-Wn-m" misal "2024-W1-11" = tahun 2024, minggu 1, bulan 11 (Des)
+  const [y,wn,m]=k.split('-');
+  const minggu=parseInt(wn.replace('W',''));
+  const tglMulai=(minggu-1)*7+1; // tgl pertama minggu itu
+  const tglTengah=Math.min(tglMulai+2, new Date(+y,+m+1,0).getDate()); // +2 = Rabu, clamp ke akhir bulan
+  const d=new Date(+y, +m, tglTengah, 12, 0, 0);
+  return d;
+}
+
 function _imSimpan(){
   const wargaList = _im.rt==='Semua' ? MEM.warga : MEM.warga.filter(w=>w.rt===_im.rt);
   const weeks=_im.selWeeks;
   const nom=MEM.nominal;
-  const now=new Date().toISOString();
   const _ts=Date.now();
   let added=0;
 
@@ -3938,10 +4105,12 @@ function _imSimpan(){
       const checked=_im.wargaChecked[w.id]?.[k];
       const sudahAda=MEM.transaksi.some(t=>t.wargaId===w.id&&t.weekKey===k&&!t.isCredit);
       if(checked && !sudahAda){
+        // date = tanggal tengah minggu yang dipilih (bukan hari ini)
+        const tglMinggu=_weekKeyToDate(k).toISOString();
         const trx={
           id:`TM${_ts}_${added}_${Math.random().toString(36).substr(2,5)}`,
           wargaId:w.id, userId:CU.id,
-          nominal:nom, date:now, weekKey:k,
+          nominal:nom, date:tglMinggu, weekKey:k,
           isCredit:false, isDebt:false, isOffline:!isOnline,
           isMassal:true
         };
