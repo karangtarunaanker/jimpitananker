@@ -1735,7 +1735,8 @@ function buildTunggakan(f){
         <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Total Tunggakan</div>
         <div style="font-size:15px;font-weight:800;color:#1a6b3c;font-family:'JetBrains Mono',monospace;white-space:nowrap">${rpFmt(totalDebt)}</div>
       </div>
-    </div>`;
+    </div>
+    ${(CU.role==='admin'||CU.role==='divisi')?`<div style="text-align:right;margin-bottom:4px"><button onclick="diagTunggakan()" style="font-size:11px;background:#f0f0f0;border:none;border-radius:6px;padding:3px 10px;cursor:pointer;color:#555">🔍 Diagnosis</button></div>`:''}`;
   const el=document.getElementById('tList'); if(!el)return;
   const canEdit=CU.role==='admin'||CU.role==='divisi';
   el.innerHTML=debtors.length===0?'<div class="empty"><div class="ei">🎉</div>Semua anggota lunas!</div>':
@@ -1747,6 +1748,33 @@ function buildTunggakan(f){
       </div>
       ${canEdit?`<button class="bsm bsm-g" onclick="openBayarTunggakan('${w.id}')">Bayar</button>`:''}
     </div>`).join('');
+}
+
+function diagTunggakan(){
+  const el=document.getElementById('tList'); if(!el)return;
+  const sample=MEM.warga.slice(0,5);
+  const expGlobal=expectedWeeks(null);
+  let html=`<div style="background:#1e1e2e;color:#cdd6f4;font-family:'JetBrains Mono',monospace;font-size:11px;padding:14px;border-radius:10px;white-space:pre-wrap;line-height:1.7">`;
+  html+=`=== DIAGNOSIS TUNGGAKAN ===\n`;
+  html+=`Total warga      : ${MEM.warga.length}\n`;
+  html+=`Total transaksi  : ${MEM.transaksi.length}\n`;
+  html+=`START_DATE global: ${START_DATE.toISOString().slice(0,10)}\n`;
+  html+=`expectedWeeks    : ${expGlobal.length} minggu\n`;
+  html+=`Range            : ${expGlobal[0]} ... ${expGlobal[expGlobal.length-1]}\n\n`;
+  sample.forEach(w=>{
+    const ex=isExempt(w);
+    const ew=expectedWeeks(w.id);
+    const pw=paidWeeks(w.id);
+    const dw=debtWeeks(w.id);
+    html+=`[${w.name}]\n`;
+    html+=`  exempt: ${ex||'tidak'} | startDate: ${w.startDate||'default'}\n`;
+    html+=`  expected: ${ew.length} | paid: ${pw.length} | HUTANG: ${dw.length}\n`;
+    if(pw.length>0) html+=`  paidWeeks[0]: ${pw[0]}\n`;
+    if(ew.length>0) html+=`  expWeeks[0] : ${ew[0]}\n`;
+    html+='\n';
+  });
+  html+=`</div>`;
+  el.innerHTML=html;
 }
 function openBayarTunggakan(wid){
   tunggakanWarga=MEM.warga.find(x=>x.id===wid);
@@ -2689,6 +2717,11 @@ function pgAdmin(){
       ${offQ.length>0?`<button style="margin-top:8px;padding:9px 16px;background:var(--gold);color:#fff;border:none;border-radius:var(--rs);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;cursor:pointer;font-size:13px" onclick="trySyncQ()">📤 Sync Sekarang</button>`:''}
     </div>
     <div class="cd">
+      <div class="sec">🔧 Perbaikan Tunggakan</div>
+      <p style="font-size:12px;color:var(--tm);margin-bottom:10px">Jika tunggakan tampil 0 padahal ada anggota yang belum bayar, klik tombol ini untuk menghapus data pengecualian lama dari semua anggota.</p>
+      <button onclick="resetSemuaExempt()" style="background:#e67e22;color:#fff;border:none;padding:10px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🔄 Reset Semua Pengecualian</button>
+    </div>
+    <div class="cd">
       <div class="sec" style="color:var(--red)">⚠️ Zona Bahaya</div>
       <p style="font-size:12px;color:var(--tm);margin-bottom:10px">Hapus antrian offline yang belum tersinkronisasi.</p>
       <button onclick="clearOffQ()" style="background:var(--red);color:#fff;border:none;padding:10px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🗑️ Hapus Antrian Offline</button>
@@ -2714,6 +2747,22 @@ function addWarga(){
   MEM.warga.push({id,name,rt,kelompok:1});
   MEM.users.push({id:'u_'+id,name,role:'anggota',wargaId:id,username:id.toLowerCase(),password:'anggota123'});
   saveMEM(); showToast('✅ Anggota ditambahkan!'); document.getElementById('nw_n').value='';
+  pgAdmin();
+}
+
+function resetSemuaExempt(){
+  if(!confirm('Reset semua pengecualian?\n\nIni akan menghapus exemptPermanent, exemptFrom, exemptUntil dari SEMUA anggota.\nstartDate per anggota TIDAK dihapus.\n\nLanjutkan?')) return;
+  let count=0;
+  MEM.warga.forEach(w=>{
+    if(w.exemptPermanent||w.exemptFrom||w.exemptUntil){
+      delete w.exemptPermanent;
+      delete w.exemptFrom;
+      delete w.exemptUntil;
+      count++;
+    }
+  });
+  saveMEM();
+  showToast('✅ Reset selesai — '+count+' anggota dibersihkan');
   pgAdmin();
 }
 function updNominal(){
