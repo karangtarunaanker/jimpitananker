@@ -915,7 +915,7 @@ function expectedWeeks(wid){
   }
   return [...new Set(weeks)];
 }
-function paidWeeks(wid){ return MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).map(t=>t.weekKey); }
+function paidWeeks(wid){ return MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit&&!t.isDebt).map(t=>t.weekKey); }
 function debtWeeks(wid){
   const w=MEM.warga.find(x=>x.id===wid);
   if(isExempt(w)) return []; // dikecualikan → tidak ada tunggakan
