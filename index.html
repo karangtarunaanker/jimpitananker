@@ -389,19 +389,26 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
 <!-- Modal Pengecualian -->
 <div class="mo" id="moExempt">
   <div class="md">
-    <div class="mt2">🚫 Pengecualian Tunggakan</div>
+    <div class="mt2">⚙️ Pengaturan Tunggakan</div>
     <div id="ex_namaInfo" style="font-size:13px;font-weight:700;color:var(--g);margin-bottom:12px"></div>
-    <div style="font-size:12px;color:var(--tl);margin-bottom:14px;line-height:1.6">
-      Anggota yang dikecualikan <b>tidak dihitung tunggakan</b>, tapi pembayaran tetap dicatat jika ada.
-    </div>
 
     <div class="fg">
-      <label>Status Pengecualian</label>
+      <label>Status</label>
       <select id="ex_tipe" class="fi" onchange="_exToggleTipe()" style="margin-top:5px">
-        <option value="none">Tidak Dikecualikan</option>
-        <option value="permanent">Permanen (selamanya)</option>
-        <option value="temp">Sementara (rentang tanggal)</option>
+        <option value="startdate">📅 Atur Tanggal Mulai Dihitung</option>
+        <option value="permanent">🚫 Dikecualikan Permanen</option>
+        <option value="temp">⏳ Dikecualikan Sementara</option>
       </select>
+    </div>
+
+    <div id="ex_startdate_div" style="margin-top:12px">
+      <div class="fg">
+        <label>Mulai Dihitung Sejak</label>
+        <input id="ex_startdate" class="fi" type="date" style="margin-top:5px">
+      </div>
+      <div style="font-size:11px;color:var(--tl);margin-top:5px">
+        Tunggakan dihitung mulai tanggal ini. Kosongkan untuk ikut default (Desember 2024).
+      </div>
     </div>
 
     <div id="ex_rentang" style="display:none;margin-top:12px">
@@ -769,54 +776,61 @@ window.addEventListener('offline',()=>{
 // ════════════════════════════════════════════════════════════
 // WEEK / PAYMENT UTILS
 // ════════════════════════════════════════════════════════════
-// Tunggakan mulai dihitung dari 1 Mei 2026
-const START_DATE = new Date('2026-05-06');
+// START_DATE dinamis: ambil dari transaksi tertua yang ada di database.
+// Fallback ke 1 Januari 2025 jika belum ada data.
+// Ini memastikan tunggakan dihitung sejak data pertama masuk, bukan tanggal hardcode.
+function getStartDate(){
+  if(!Array.isArray(MEM.transaksi)||MEM.transaksi.length===0) return new Date('2024-12-01');
+  const nonCredit=MEM.transaksi.filter(t=>!t.isCredit&&t.date);
+  if(nonCredit.length===0) return new Date('2024-12-01');
+  const oldest=nonCredit.reduce((min,t)=>new Date(t.date)<new Date(min.date)?t:min);
+  const oldestDate=new Date(oldest.date);
+  // Jika transaksi tertua lebih muda dari Des 2024, tetap pakai Des 2024
+  const defaultStart=new Date('2024-12-01');
+  return oldestDate < defaultStart ? oldestDate : defaultStart;
+}
+// START_DATE dipakai di expectedWeeks — gunakan getter agar selalu fresh
+Object.defineProperty(window,'START_DATE',{get:()=>getStartDate(),configurable:true});
 
 // ── WEEK KEY LOGIC ───────────────────────────────────────────
-// Sistem baru: minggu dihitung berdasarkan hari MINGGU yang jatuh di bulan itu
-// Minggu ke-N = minggu kalender yang mengandung hari Minggu ke-N di bulan tersebut
-// weekKey format: "YYYY-WN-M" (sama seperti sebelumnya agar kompatibel)
+// Sistem: 1 minggu = Jumat s/d Kamis
+// Patokan: hari Minggu ke-N di bulan itu menentukan "Minggu ke-N"
+// Periode Minggu ke-N = Jumat sebelum hari Minggu ke-N s/d Kamis sesudahnya
+// weekKey format: "YYYY-WN-M" — N = urutan hari Minggu di bulan M
 
 // Cari hari Minggu pertama di bulan tertentu
 function _firstSundayOfMonth(year, mon){
   const d=new Date(year,mon,1);
-  // Geser ke hari Minggu pertama
   while(d.getDay()!==0) d.setDate(d.getDate()+1);
   return new Date(d);
 }
 
-// Konversi tanggal ke weekKey berdasarkan hari Minggu
+// Konversi tanggal ke weekKey
+// Logika: cari hari Minggu yang "menaungi" tanggal tersebut dalam siklus Jumat-Kamis
+// Setiap periode = Jumat (H-2 sebelum Minggu) s/d Kamis (H+4 setelah Minggu)
+// Hari Minggu ke-N di bulan mana pun menentukan label bulan & nomor minggu
 function weekKey(date){
   const d=date?new Date(date):new Date();
-  const y=d.getFullYear(), m=d.getMonth();
+  // Geser ke hari Minggu yang menaungi tanggal ini
+  // Jumat(5) & Sabtu(6) → Minggu 2 hari ke depan / 1 hari ke depan
+  // Minggu(0) s/d Kamis(4) → Minggu hari itu atau beberapa hari lalu
+  const day=d.getDay(); // 0=Min,1=Sen,2=Sel,3=Rab,4=Kam,5=Jum,6=Sab
+  const sun=new Date(d);
+  if(day===5) sun.setDate(d.getDate()+2);      // Jumat → Minggu +2
+  else if(day===6) sun.setDate(d.getDate()+1); // Sabtu → Minggu +1
+  else sun.setDate(d.getDate()-day);            // Min-Kam → Minggu sebelumnya/hari ini
+  // Tentukan bulan & nomor minggu dari hari Minggu ini
+  const y=sun.getFullYear(), m=sun.getMonth();
   const firstSun=_firstSundayOfMonth(y,m);
-  // Hitung minggu ke berapa: berapa hari Minggu sudah lewat sejak awal bulan
-  // Tgl sebelum hari Minggu pertama → masuk minggu 1 juga (pra-minggu pertama)
-  if(d<firstSun){
-    return `${y}-W1-${m}`;
-  }
-  const diffDays=Math.floor((d-firstSun)/(1000*60*60*24));
+  const diffDays=Math.floor((sun-firstSun)/(1000*60*60*24));
   const wn=Math.floor(diffDays/7)+1;
   return `${y}-W${wn}-${m}`;
 }
 
-// Untuk menyimpan transaksi: Senin-Kamis → weekKey minggu ini (hari Minggu terakhir)
-//                            Jumat-Sabtu → weekKey minggu depan (Minggu berikutnya)
-function weekKeyForSave(date){
-  const d=date?new Date(date):new Date();
-  const day=d.getDay(); // 0=Min,1=Sen,2=Sel,3=Rab,4=Kam,5=Jum,6=Sab
-  if(day>=5){ // Jumat atau Sabtu → geser ke hari Minggu berikutnya
-    const next=new Date(d);
-    next.setDate(d.getDate()+(7-day));
-    return weekKey(next);
-  }
-  return weekKey(d);
-}
-
 // thisWeek = weekKey untuk input SEKARANG
-function thisWeek(){ return weekKeyForSave(); }
+function thisWeek(){ return weekKey(); }
 
-// Ambil tanggal hari Minggu dari weekKey (untuk referensi)
+// Ambil tanggal hari Minggu dari weekKey
 function _sundayOfWeekKey(wk){
   if(!wk||wk==='KREDIT') return null;
   const [y,wn,m]=wk.split('-').map(Number);
@@ -824,6 +838,24 @@ function _sundayOfWeekKey(wk){
   const sun=new Date(firstSun);
   sun.setDate(firstSun.getDate()+(wn-1)*7);
   return sun;
+}
+
+// Ambil tanggal Jumat (awal periode) dari weekKey
+function _fridayOfWeekKey(wk){
+  const sun=_sundayOfWeekKey(wk);
+  if(!sun) return null;
+  const fri=new Date(sun);
+  fri.setDate(sun.getDate()-2);
+  return fri;
+}
+
+// Ambil tanggal Kamis (akhir periode) dari weekKey
+function _thursdayOfWeekKey(wk){
+  const sun=_sundayOfWeekKey(wk);
+  if(!sun) return null;
+  const thu=new Date(sun);
+  thu.setDate(sun.getDate()+4);
+  return thu;
 }
 
 function weekLabel(k){
@@ -842,15 +874,13 @@ function showToast(m,dur=2800){
 function closeModal(id){ const el=document.getElementById(id); if(el) el.classList.remove('show'); }
 function openModal(id){ const el=document.getElementById(id); if(el) el.classList.add('show'); }
 
-// Cek minggu sudah tutup = sudah lewat Kamis setelah hari Minggu ke-N bulan itu
+// Cek minggu sudah tutup = sudah lewat Kamis (akhir periode Jumat-Kamis)
 function isWeekClosed(weekK){
-  const sun=_sundayOfWeekKey(weekK);
-  if(!sun) return true;
-  // Kamis = hari Minggu + 4 hari
-  const kamis=new Date(sun);
-  kamis.setDate(sun.getDate()+4);
-  kamis.setHours(23,59,59,999);
-  return new Date()>kamis;
+  const thu=_thursdayOfWeekKey(weekK);
+  if(!thu) return true;
+  const batas=new Date(thu);
+  batas.setHours(23,59,59,999);
+  return new Date()>batas;
 }
 
 function expectedWeeks(wid){
@@ -862,12 +892,22 @@ function expectedWeeks(wid){
       if(!isNaN(sd)) startFrom=sd;
     }
   }
-  // Mulai dari hari Minggu pertama yang >= startFrom
+  // Iterasi per minggu: mulai dari weekKey startFrom,
+  // lalu maju 7 hari (ke hari Minggu berikutnya) sampai sekarang
   const weeks=[];
   const now=new Date();
+  // Temukan hari Minggu pertama pada atau setelah startFrom
   const cur=new Date(startFrom);
-  // Geser ke hari Minggu berikutnya jika belum hari Minggu
-  if(cur.getDay()!==0) cur.setDate(cur.getDate()+(7-cur.getDay()));
+  const curDay=cur.getDay();
+  if(curDay===0){
+    // Sudah hari Minggu — mulai dari sini
+  } else if(curDay<=4){
+    // Sen-Kam: mundur ke Minggu sebelumnya (masih periode yang sama)
+    cur.setDate(cur.getDate()-curDay);
+  } else {
+    // Jum-Sab: maju ke Minggu berikutnya
+    cur.setDate(cur.getDate()+(7-curDay));
+  }
   while(cur<=now){
     const k=weekKey(new Date(cur));
     if(!weeks.includes(k)&&isWeekClosed(k)) weeks.push(k);
@@ -1542,14 +1582,18 @@ function pgRekap(){
   buildRekap();
 }
 function getWeeksForMonth(mon,year){
-  // Hasilkan SEMUA minggu dalam bulan (Mgg 1, Mgg 2, Mgg 3, Mgg 4, dan Mgg 5 jika ada)
+  // Hasilkan semua weekKey yang "milik" bulan ini
+  // Minggu ke-N bulan ini = weekKey dengan bulan=mon dan wn=N
+  // Ditentukan dari hari Minggu ke-N di bulan mon
   const weeks=[];
-  const mn=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];
-  // Cek berapa minggu ada di bulan tsb (ceil(totalHari/7) atau max minggu ke-5 jika tgl 29-31 ada)
-  const lastDay=new Date(year, mon+1, 0).getDate(); // hari terakhir bulan
-  const maxWeek=Math.ceil(lastDay/7);
-  for(let w=1;w<=maxWeek;w++){
-    weeks.push(`${year}-W${w}-${mon}`);
+  const firstSun=_firstSundayOfMonth(year,mon);
+  let wn=1;
+  const cur=new Date(firstSun);
+  while(cur.getMonth()===mon){
+    weeks.push(`${year}-W${wn}-${mon}`);
+    cur.setDate(cur.getDate()+7);
+    wn++;
+    if(wn>6) break;
   }
   return weeks;
 }
@@ -2208,20 +2252,26 @@ function buildWarga(){
       const dw=debtWeeks(w.id).length;
       const tot=MEM.transaksi.filter(t=>t.wargaId===w.id&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
       const exStat=isExempt(w);
-      const exLabel=exStat==='permanent'?'🚫 Permanen':exStat==='temp'?'🚫 Sementara':'';
+      // Icon tombol: 🚫 jika exempt permanen, ⏳ jika sementara, 📅 jika ada startDate, ⚙️ default
+      const hasSd=!exStat&&w.startDate;
+      const exBtnIcon=exStat==='permanent'?'🚫':exStat==='temp'?'⏳':hasSd?'📅':'⚙️';
+      const exBtnBg=exStat?'var(--rl)':hasSd?'#e8f5e9':'#f5f5f5';
+      const exBtnColor=exStat?'var(--red)':hasSd?'#2e7d32':'#888';
       return`<div class="li">
         <div class="av">${w.name[0]}</div>
         <div style="flex:1">
           <div class="wn">${w.name}</div>
-          <div class="ws">${w.rt} · ${rpFmt(tot)}${dw>0?' · ⚠️ '+dw+' tunggak':''}${exLabel?' · <span style="color:var(--red);font-weight:700">'+exLabel+'</span>':''}</div>
+          <div class="ws">${w.rt} · ${rpFmt(tot)}${dw>0?' · ⚠️ '+dw+' tunggak':''}</div>
         </div>
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
           <span class="badge ${exStat?'bu':paid?'bp':dw>0?'bd':'bu'}">${exStat?'🚫 Dikecualikan':paid?'✓ Bayar':dw>0?'⚠️ Nunggak':'⏳ Belum'}</span>
           <div style="display:flex;gap:3px">
             <button class="bsm bsm-g" onclick="showQR('${w.id}')">QR</button>
-            ${canEdit?`<button class="bsm" onclick="openExempt('${w.id}')" style="background:${exStat?'var(--rl)':'#f5f5f5'};color:${exStat?'var(--red)':'#888'};border:none;border-radius:7px;padding:4px 8px;cursor:pointer;font-size:13px" title="Pengecualian Tunggakan">🚫</button>
-            <button class="bsm bsm-o" onclick="openEditW('${w.id}')">✏️</button>
-            <button class="bsm bsm-r" onclick="delWarga('${w.id}')">🗑️</button>`:''}
+            ${canEdit?`<button class="bsm" onclick="showWargaWeekDetail('${w.id}')" title="Detail per minggu"
+                style="background:#e8f0fe;color:#1a73e8;border:none;border-radius:7px;padding:4px 8px;cursor:pointer;font-size:13px">📅</button>
+              <button class="bsm" onclick="openExempt('${w.id}')" style="background:${exBtnBg};color:${exBtnColor};border:none;border-radius:7px;padding:4px 8px;cursor:pointer;font-size:13px" title="Pengaturan Tunggakan">${exBtnIcon}</button>
+              <button class="bsm bsm-o" onclick="openEditW('${w.id}')">✏️</button>
+              <button class="bsm bsm-r" onclick="delWarga('${w.id}')">🗑️</button>`:''}
           </div>
         </div>
       </div>`;
@@ -2252,9 +2302,10 @@ function openExempt(id){
   const tipeEl=document.getElementById('ex_tipe');
   if(w.exemptPermanent){ tipeEl.value='permanent'; }
   else if(w.exemptFrom&&w.exemptUntil){ tipeEl.value='temp'; }
-  else { tipeEl.value='none'; }
+  else { tipeEl.value='startdate'; }
 
-  // Isi tanggal jika ada
+  // Isi field
+  document.getElementById('ex_startdate').value=w.startDate||'';
   document.getElementById('ex_dari').value=w.exemptFrom||'';
   document.getElementById('ex_sampai').value=w.exemptUntil||'';
 
@@ -2264,6 +2315,7 @@ function openExempt(id){
 
 function _exToggleTipe(){
   const tipe=document.getElementById('ex_tipe').value;
+  document.getElementById('ex_startdate_div').style.display=tipe==='startdate'?'block':'none';
   document.getElementById('ex_rentang').style.display=tipe==='temp'?'block':'none';
 }
 
@@ -2271,10 +2323,11 @@ function saveExempt(){
   const tipe=document.getElementById('ex_tipe').value;
   const i=MEM.warga.findIndex(x=>x.id===_exemptWId); if(i===-1)return;
 
-  // Reset dulu semua field exempt
+  // Reset semua field exempt & startDate
   delete MEM.warga[i].exemptPermanent;
   delete MEM.warga[i].exemptFrom;
   delete MEM.warga[i].exemptUntil;
+  // startDate tetap disimpan meski ganti ke exempt, hanya diupdate jika tipe=startdate
 
   if(tipe==='permanent'){
     MEM.warga[i].exemptPermanent=true;
@@ -2286,9 +2339,12 @@ function saveExempt(){
     if(new Date(dari)>new Date(sampai)){showToast('❌ Tanggal dari harus sebelum sampai');return;}
     MEM.warga[i].exemptFrom=dari;
     MEM.warga[i].exemptUntil=sampai;
-    showToast('🚫 Dikecualikan sementara s/d '+sampai);
+    showToast('⏳ Dikecualikan sementara s/d '+sampai);
   } else {
-    showToast('✅ Pengecualian '+MEM.warga[i].name+' dicabut');
+    // tipe === 'startdate'
+    const sd=document.getElementById('ex_startdate').value;
+    if(sd){ MEM.warga[i].startDate=sd; showToast('📅 Mulai dihitung sejak '+sd); }
+    else { delete MEM.warga[i].startDate; showToast('📅 Mulai dihitung sejak default (Des 2024)'); }
   }
 
   saveMEM();
@@ -2633,32 +2689,21 @@ function pgAdmin(){
       ${offQ.length>0?`<button style="margin-top:8px;padding:9px 16px;background:var(--gold);color:#fff;border:none;border-radius:var(--rs);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;cursor:pointer;font-size:13px" onclick="trySyncQ()">📤 Sync Sekarang</button>`:''}
     </div>
     <div class="cd">
-      <div class="sec">🔧 Koreksi Data Input Massal</div>
-      <p style="font-size:12px;color:var(--tm);margin-bottom:10px;line-height:1.6">
-        Perbaiki tanggal transaksi yang diinput lewat fitur Input Massal — tanggal akan disesuaikan ke tanggal tengah minggu yang sesuai dengan weekKey-nya (bukan tanggal hari input).
-      </p>
-      <div id="_koreksiInfo" style="font-size:12px;color:var(--tl);margin-bottom:10px"></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="_cekDataMassal()" style="padding:9px 16px;background:var(--gp);color:var(--g);border:1.5px solid var(--gl);border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🔍 Cek Data</button>
-        <button onclick="_koreksiDataMassal()" id="_btnKoreksi" style="padding:9px 16px;background:#1a3a5c;color:#fff;border:none;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:none">✅ Koreksi Sekarang</button>
-      </div>
-    </div>
-    <div class="cd">
-      <div class="sec">🔄 Migrasi WeekKey ke Sistem Hari Minggu</div>
-      <p style="font-size:12px;color:var(--tm);margin-bottom:10px;line-height:1.6">
-        Konversi semua weekKey lama (sistem tanggal 1-7) ke sistem baru (berdasarkan hari Minggu).
-        Transaksi tanpa tanggal valid akan dilewati dan ditandai.
-      </p>
-      <div id="_migrasiInfo" style="font-size:12px;color:var(--tl);margin-bottom:10px"></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button onclick="_cekMigrasi()" style="padding:9px 16px;background:var(--gp);color:var(--g);border:1.5px solid var(--gl);border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🔍 Cek Data</button>
-        <button onclick="_jalankanMigrasi()" id="_btnMigrasi" style="padding:9px 16px;background:#1a3a5c;color:#fff;border:none;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:none">🔄 Migrasi Sekarang</button>
-      </div>
-    </div>
-    <div class="cd">
       <div class="sec" style="color:var(--red)">⚠️ Zona Bahaya</div>
       <p style="font-size:12px;color:var(--tm);margin-bottom:10px">Hapus antrian offline yang belum tersinkronisasi.</p>
       <button onclick="clearOffQ()" style="background:var(--red);color:#fff;border:none;padding:10px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🗑️ Hapus Antrian Offline</button>
+    </div>
+    <div class="cd">
+      <div class="sec" style="color:#c0392b">🗂️ Kelola Data Transaksi</div>
+      <p style="font-size:12px;color:var(--tm);margin-bottom:12px">Hapus transaksi berdasarkan periode tertentu, atau reset semua data transaksi sekaligus. Data warga, akun, kas, dan absen <b>tidak terpengaruh</b>.</p>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button onclick="adminHapusPeriode()" style="background:#e67e22;color:#fff;border:none;padding:11px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;text-align:left">
+          📅 Hapus Transaksi per Bulan/Minggu…
+        </button>
+        <button onclick="adminResetSemuaTrx()" style="background:var(--red);color:#fff;border:none;padding:11px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;text-align:left">
+          ⚠️ Reset SEMUA Transaksi + Rekap Edit…
+        </button>
+      </div>
     </div>`;
 }
 function addWarga(){
@@ -2697,158 +2742,9 @@ function saveEditUser(){
   saveMEM(); closeModal('moEditUser'); showToast('✅ Akun berhasil diperbarui!');
   if(curPage==='kelolaAkun') _renderKelolaAkun(); else pgAdmin();
 }
-function _weekKeyLamaToDate(wk){
-  // Konversi weekKey lama (sistem tanggal) ke tanggal tengah minggu
-  const [y,wn,m]=wk.split('-').map(Number);
-  const n=parseInt(wn);
-  const tglMulai=(n-1)*7+1;
-  const tglAkhir=Math.min(n*7,new Date(y,m+1,0).getDate());
-  const tglTengah=Math.floor((tglMulai+tglAkhir)/2);
-  return new Date(y,m,tglTengah);
-}
-
-function _isWeekKeyBaru(wk){
-  // Cek apakah weekKey sudah pakai sistem hari Minggu
-  // Caranya: konversi weekKey → tanggal Minggu → konversi balik → harus sama
-  if(!wk||wk==='KREDIT') return true;
-  const parts=wk.split('-');
-  if(parts.length!==3) return true;
-  const sun=_sundayOfWeekKey(wk);
-  if(!sun) return true;
-  const rebuilt=weekKey(sun);
-  return rebuilt===wk;
-}
-
-function _cekMigrasi(){
-  const el=document.getElementById('_migrasiInfo');
-  const btn=document.getElementById('_btnMigrasi');
-  if(!el) return;
-
-  const perlu=MEM.transaksi.filter(t=>{
-    if(!t.weekKey||t.weekKey==='KREDIT'||t.isCredit) return false;
-    return !_isWeekKeyBaru(t.weekKey);
-  });
-
-  const tanpaDate=perlu.filter(t=>{
-    if(!t.date) return true;
-    const d=new Date(t.date);
-    return isNaN(d);
-  });
-
-  const bisaMigrasi=perlu.length-tanpaDate.length;
-
-  if(!perlu.length){
-    el.innerHTML='<span style="color:var(--g);font-weight:700">✅ Semua data sudah pakai sistem hari Minggu.</span>';
-    if(btn) btn.style.display='none';
-  } else {
-    el.innerHTML=`<span style="color:var(--red);font-weight:700">⚠️ ${perlu.length} transaksi perlu dimigrasi</span><br>
-      <span style="color:var(--tm)">• ${bisaMigrasi} transaksi bisa dimigrasi otomatis<br>
-      • ${tanpaDate.length} transaksi tanpa tanggal valid (akan dilewati & ditandai)</span>`;
-    if(btn) btn.style.display='inline-block';
-  }
-}
-
-function _jalankanMigrasi(){
-  if(!confirm('Migrasi weekKey ke sistem hari Minggu?\nProses ini tidak bisa dibatalkan.')) return;
-  let migrated=0, skipped=0;
-
-  MEM.transaksi.forEach(t=>{
-    if(!t.weekKey||t.weekKey==='KREDIT'||t.isCredit) return;
-    if(_isWeekKeyBaru(t.weekKey)) return; // sudah sistem baru
-
-    // Coba ambil tanggal dari field date
-    let tDate=null;
-    if(t.date){
-      const d=new Date(t.date);
-      if(!isNaN(d)) tDate=d;
-    }
-
-    if(!tDate){
-      // Tanggal tidak valid — lewati, tandai
-      t._migrasiSkip=true;
-      skipped++;
-      return;
-    }
-
-    // Konversi: weekKey baru berdasarkan tanggal transaksi
-    const newKey=weekKey(tDate);
-    t.weekKey=newKey;
-    t._migrated=true;
-    migrated++;
-  });
-
-  if(isOnline){
-    saveTrx();
-    showToast(`✅ ${migrated} dimigrasi, ${skipped} dilewati`);
-  } else {
-    showToast(`⚠️ ${migrated} dimigrasi lokal — sync dulu agar tersimpan`);
-  }
-  _cekMigrasi();
-}
-
 function clearOffQ(){
   if(!confirm('Hapus semua antrian offline?'))return;
   offQ=[]; saveQ(); updateSyncPill(); showToast('🗑️ Antrian dihapus'); pgAdmin();
-}
-
-function _cekDataMassal(){
-  // Cari transaksi isMassal yang tanggalnya tidak sesuai weekKey-nya
-  const salah=MEM.transaksi.filter(t=>{
-    if(!t.isMassal||t.isCredit||!t.weekKey||t.weekKey==='KREDIT') return false;
-    const [y,wn,m]=t.weekKey.split('-');
-    const minggu=parseInt(wn.replace('W',''));
-    const tglMulai=(minggu-1)*7+1;
-    const tglAkhir=Math.min(minggu*7, new Date(+y,+m+1,0).getDate());
-    const tDate=new Date(t.date);
-    const tMonth=tDate.getMonth(), tYear=tDate.getFullYear(), tTgl=tDate.getDate();
-    // Cek apakah tanggal transaksi masuk dalam bulan & rentang minggu yang benar
-    return !(tYear===+y && tMonth===+m && tTgl>=tglMulai && tTgl<=tglAkhir);
-  });
-
-  const el=document.getElementById('_koreksiInfo');
-  const btn=document.getElementById('_btnKoreksi');
-  if(!el)return;
-
-  if(salah.length===0){
-    el.innerHTML='<span style="color:var(--g);font-weight:700">✅ Semua data sudah benar, tidak perlu koreksi.</span>';
-    if(btn) btn.style.display='none';
-  } else {
-    el.innerHTML=`<span style="color:var(--red);font-weight:700">⚠️ Ditemukan ${salah.length} transaksi dengan tanggal tidak sesuai minggu.</span><br>
-      <span style="color:var(--tm)">Contoh: weekKey "${salah[0].weekKey}" tapi tanggal tercatat ${new Date(salah[0].date).toLocaleDateString('id-ID')}.</span>`;
-    if(btn) btn.style.display='inline-block';
-  }
-}
-
-function _koreksiDataMassal(){
-  let fixed=0;
-  MEM.transaksi.forEach(t=>{
-    if(!t.isMassal||t.isCredit||!t.weekKey||t.weekKey==='KREDIT') return;
-    const [y,wn,m]=t.weekKey.split('-');
-    const minggu=parseInt(wn.replace('W',''));
-    const tglMulai=(minggu-1)*7+1;
-    const tglAkhir=Math.min(minggu*7, new Date(+y,+m+1,0).getDate());
-    const tDate=new Date(t.date);
-    const tMonth=tDate.getMonth(), tYear=tDate.getFullYear(), tTgl=tDate.getDate();
-    const sudahBenar=tYear===+y && tMonth===+m && tTgl>=tglMulai && tTgl<=tglAkhir;
-    if(!sudahBenar){
-      // Koreksi: set ke tanggal tengah minggu yang sesuai
-      t.date=_weekKeyToDate(t.weekKey).toISOString();
-      fixed++;
-    }
-  });
-
-  if(fixed===0){
-    showToast('✅ Tidak ada yang perlu dikoreksi');
-    return;
-  }
-
-  if(isOnline){
-    saveTrx();
-    showToast(`✅ ${fixed} transaksi berhasil dikoreksi!`);
-  } else {
-    showToast(`⚠️ ${fixed} dikoreksi lokal — sync dulu agar tersimpan ke server`);
-  }
-  _cekDataMassal(); // refresh info
 }
 
 // ── RIWAYAT WARGA ────────────────────────────────────────────
@@ -3156,31 +3052,28 @@ function pgRekapJimpitan(){
 function _getWeekRanges(year, mon){
   const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
   const nmb=mn[mon];
-  const lastDay=new Date(year,mon+1,0).getDate();
   const firstSun=_firstSundayOfMonth(year,mon);
   const ranges=[];
-  // Minggu 1: awal bulan s/d Sabtu setelah hari Minggu pertama
-  // Jika hari Minggu pertama > tgl 1, maka tgl 1 s/d hari Minggu pertama-1 masuk W1 juga
   let wn=1;
-  let cur=new Date(firstSun);
-  // Tambah W1 mulai dari tgl 1 s/d Sabtu minggu pertama
-  const w1Start=new Date(year,mon,1);
-  const w1End=new Date(firstSun); w1End.setDate(firstSun.getDate()+6); w1End.setHours(23,59,59);
-  if(w1End.getMonth()>mon) w1End.setDate(lastDay);
-  ranges.push({mgg:1,start:w1Start,end:new Date(w1End),label:`Minggu 1 ${nmb} ${year}`,key:`${year}-W1-${mon}`});
-  // Minggu 2, 3, 4, dst: setiap 7 hari dari hari Minggu ke-2
-  cur.setDate(firstSun.getDate()+7);
-  wn=2;
+  const cur=new Date(firstSun);
   while(cur.getMonth()===mon){
-    const wStart=new Date(cur);
-    const wEnd=new Date(cur); wEnd.setDate(cur.getDate()+6); wEnd.setHours(23,59,59);
-    if(wEnd.getMonth()>mon) wEnd.setDate(lastDay);
-    if(wStart.getDate()<=lastDay){
-      ranges.push({mgg:wn,start:wStart,end:new Date(wEnd),label:`Minggu ${wn} ${nmb} ${year}`,key:`${year}-W${wn}-${mon}`});
-    }
+    const sun=new Date(cur);
+    // Jumat = Minggu - 2 hari (awal periode)
+    const fri=new Date(sun); fri.setDate(sun.getDate()-2);
+    // Kamis = Minggu + 4 hari (akhir periode)
+    const thu=new Date(sun); thu.setDate(sun.getDate()+4); thu.setHours(23,59,59);
+    const key=`${year}-W${wn}-${mon}`;
+    ranges.push({
+      mgg:wn,
+      start:new Date(fri),
+      end:new Date(thu),
+      sun:new Date(sun),
+      label:`Minggu ${wn} ${nmb} ${year}`,
+      key
+    });
     cur.setDate(cur.getDate()+7);
     wn++;
-    if(wn>6) break; // safety
+    if(wn>6) break;
   }
   return ranges;
 }
@@ -3227,11 +3120,8 @@ function _buildRekapJimpitan(){
   let html='';
 
   weeks.forEach(wk=>{
-    // Transaksi dalam rentang minggu ini
-    const trxMinggu=MEM.transaksi.filter(t=>{
-      const d=new Date(t.date);
-      return d>=wk.start && d<=wk.end;
-    });
+    // Transaksi dalam minggu ini — filter berdasarkan weekKey (konsisten dengan sistem baru)
+    const trxMinggu=MEM.transaksi.filter(t=>t.weekKey===wk.key);
 
     // Iuran normal = transaksi di minggu ini, bukan kredit, bukan tunggakan
     const iuranTrx=trxMinggu.filter(t=>!t.isCredit&&!t.isDebt);
@@ -3262,11 +3152,13 @@ function _buildRekapJimpitan(){
     const total=iuranFinal+tunggakanFinal+kreditFinal;
     totalBulan+=total;
 
-    // Tandai minggu yang sudah lewat (hari ini > hari Kamis minggu itu)
-    const batasKamis=new Date(wk.end);
-    batasKamis.setDate(wk.end.getDate()-3); // Kamis = akhir-3 (Minggu=akhir)
-    const sudahLewat=now>wk.end;
-    const belumLewat=now<wk.start;
+    // Tandai status minggu: hanya minggu aktif saat ini = Berjalan
+    // Minggu sudah lewat (isWeekClosed) = Selesai
+    // Minggu belum dimulai (belum Jumat pembuka) = Belum
+    const tw=thisWeek();
+    const adalahMingguIni=(wk.key===tw);
+    const sudahLewat=!adalahMingguIni&&isWeekClosed(wk.key);
+    const belumLewat=!adalahMingguIni&&!sudahLewat&&now<wk.start;
 
 const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:2px">
   ${Object.entries(tunggakanPerWarga).map(([n,r])=>
@@ -3276,8 +3168,10 @@ const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;
     <div class="cd" style="margin-bottom:8px;padding:12px${belumLewat?';opacity:0.5':''}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <div style="font-weight:700;color:var(--g);font-size:12px;white-space:nowrap">${wk.label}</div>
-        <div style="font-size:10px;color:${sudahLewat?'#888':'var(--g)'}">
-          ${belumLewat?'⏳ Belum':sudahLewat?'✅ Selesai':'🔄 Berjalan'}
+        <div style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;
+          background:${belumLewat?'#f0f0f0':sudahLewat?'#e8f5e9':adalahMingguIni?'#fff8e1':'#e8f5e9'};
+          color:${belumLewat?'#999':sudahLewat?'#2e7d52':adalahMingguIni?'#e65100':'#2e7d52'}">
+          ${belumLewat?'⏳ Belum':sudahLewat?'✅ Selesai':adalahMingguIni?'🔄 Berjalan':'✅ Selesai'}
         </div>
       </div>
 
@@ -3903,16 +3797,14 @@ function _imStep1(){
   const now=new Date();
   const monthsFull=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
-  // Buat struktur bulan → minggu
+  // Buat struktur bulan → minggu berbasis hari Minggu ke-N di bulan itu
   const bulanList=[];
   for(let i=17;i>=0;i--){
     const d=new Date(now.getFullYear(), now.getMonth()-i, 1);
     const m=d.getMonth(), y=d.getFullYear();
-    const lastDay=new Date(y,m+1,0).getDate();
-    const maxWeek=Math.ceil(lastDay/7);
-    const weeks=[];
-    for(let w=1;w<=maxWeek;w++) weeks.push({key:`${y}-W${w}-${m}`, label:`Minggu ${w}`});
+    const weeks=getWeeksForMonth(m,y).map((k,idx)=>({key:k,label:`Minggu ${idx+1}`}));
     bulanList.push({label:`${monthsFull[m]} ${y}`, bulanKey:`${y}-${m}`, weeks});
+
   }
 
   const totalSel=_im.selWeeks.length;
@@ -4003,13 +3895,9 @@ function _imToggleBulanPanel(bulanKey){
 
 function _imToggleBulanCheck(bulanKey, val){
   // Centang/uncek semua minggu di bulan ini
-  const now=new Date();
-  const monthsFull=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
   const [y,m]=bulanKey.split('-').map(Number);
-  const lastDay=new Date(y,m+1,0).getDate();
-  const maxWeek=Math.ceil(lastDay/7);
-  for(let w=1;w<=maxWeek;w++){
-    const k=`${y}-W${w}-${m}`;
+  const wks=getWeeksForMonth(m,y);
+  for(const k of wks){
     if(val){ if(!_im.selWeeks.includes(k)) _im.selWeeks.push(k); }
     else { _im.selWeeks=_im.selWeeks.filter(x=>x!==k); }
   }
@@ -4037,20 +3925,14 @@ function _imGetWeeksRange(monthsBack){
   for(let i=monthsBack-1;i>=0;i--){
     const d=new Date(now.getFullYear(), now.getMonth()-i, 1);
     const m=d.getMonth(), y=d.getFullYear();
-    const lastDay=new Date(y,m+1,0).getDate();
-    const maxWeek=Math.ceil(lastDay/7);
-    for(let w=1;w<=maxWeek;w++) result.push(`${y}-W${w}-${m}`);
+    getWeeksForMonth(m,y).forEach(k=>result.push(k));
   }
   return result;
 }
 
 function _imPilihBulanIni(){
   const now=new Date();
-  const m=now.getMonth(), y=now.getFullYear();
-  const lastDay=new Date(y,m+1,0).getDate();
-  const maxWeek=Math.ceil(lastDay/7);
-  _im.selWeeks=[];
-  for(let w=1;w<=maxWeek;w++) _im.selWeeks.push(`${y}-W${w}-${m}`);
+  _im.selWeeks=getWeeksForMonth(now.getMonth(),now.getFullYear());
   _imStep1();
 }
 function _imPilih3Bulan(){ _im.selWeeks=_imGetWeeksRange(3); _imStep1(); }
@@ -4207,66 +4089,81 @@ function _imStep3(){
   const wargaList = _im.rt==='Semua' ? MEM.warga : MEM.warga.filter(w=>w.rt===_im.rt);
   const weeks=_im.selWeeks;
   const nom=MEM.nominal;
-  const monthsFull=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 
-  // Hitung transaksi baru yang akan ditambah (skip yang sudah ada di DB)
-  let toAdd=[], skipCount=0;
+  // Hitung tambah dan hapus
+  let toAdd=[], toDelete=[];
   wargaList.forEach(w=>{
     weeks.forEach(k=>{
       const checked=_im.wargaChecked[w.id]?.[k];
-      const sudahAda=MEM.transaksi.some(t=>t.wargaId===w.id&&t.weekKey===k&&!t.isCredit);
+      const trxAda=MEM.transaksi.filter(t=>t.wargaId===w.id&&t.weekKey===k&&!t.isCredit);
+      const sudahAda=trxAda.length>0;
       if(checked && !sudahAda){
         toAdd.push({wid:w.id, name:w.name, rt:w.rt, weekKey:k});
       }
-      if(!checked && sudahAda) skipCount++; // yang diUNcheck tapi sudah ada di DB
+      if(!checked && sudahAda){
+        toDelete.push({wid:w.id, name:w.name, rt:w.rt, weekKey:k, trxIds:trxAda.map(t=>t.id)});
+      }
     });
   });
+
+  _im._toAdd=toAdd;
+  const allHapusIds=toDelete.map(d=>d.trxIds).flat();
 
   const totalRp=toAdd.length*nom;
   const byWeek={};
   toAdd.forEach(t=>{ byWeek[t.weekKey]=(byWeek[t.weekKey]||0)+1; });
+  const byWeekDel={};
+  toDelete.forEach(t=>{ byWeekDel[t.weekKey]=(byWeekDel[t.weekKey]||0)+1; });
 
   const byWeekHTML=weeks.map(k=>{
-    const cnt=byWeek[k]||0;
+    const cntAdd=byWeek[k]||0;
+    const cntDel=byWeekDel[k]||0;
+    if(cntAdd===0&&cntDel===0)return'';
     return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--b);font-size:12px">
       <span>${weekLabel(k)}</span>
-      <span style="font-weight:700;color:${cnt>0?'var(--g)':'var(--tl)'}">${cnt} anggota · ${rpFmt(cnt*nom)}</span>
+      <span>
+        ${cntAdd>0?`<span style="color:var(--g);font-weight:700">+${cntAdd} tambah</span>`:''}
+        ${cntAdd>0&&cntDel>0?' · ':''}
+        ${cntDel>0?`<span style="color:var(--red);font-weight:700">−${cntDel} hapus</span>`:''}
+      </span>
     </div>`;
-  }).join('');
+  }).filter(Boolean).join('');
 
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="_im.step=2;_imRender()">← Kembali Edit</button>
     <div class="ct">📥 Preview & Simpan</div>
 
     <div class="cd">
-      <div class="sec">Ringkasan</div>
+      <div class="sec">Ringkasan Perubahan</div>
       <div class="sg" style="margin-bottom:10px">
-        <div class="sb"><div class="sl">Transaksi Baru</div><div class="sv">${toAdd.length}</div></div>
-        <div class="sb"><div class="sl">Total Nominal</div><div class="sv gold">${rpFmt(totalRp)}</div></div>
+        <div class="sb"><div class="sl">Tambah Baru</div><div class="sv">${toAdd.length}</div></div>
+        <div class="sb"><div class="sl">Nominal Tambah</div><div class="sv gold">${rpFmt(totalRp)}</div></div>
+        ${toDelete.length>0?`
+        <div class="sb"><div class="sl" style="color:var(--red)">Akan Dihapus</div><div class="sv red">${toDelete.length}</div></div>
+        <div class="sb"><div class="sl">Nominal Hapus</div><div class="sv red">−${rpFmt(toDelete.length*nom)}</div></div>`:''}
       </div>
-      ${skipCount>0?`<div style="background:var(--gol);border-radius:8px;padding:9px 12px;font-size:12px;color:#7a5a00;margin-bottom:10px">
-        ⚠️ <b>${skipCount}</b> entri di-uncheck tapi sudah ada di database — tidak akan dihapus otomatis (hapus manual dari Riwayat jika perlu).
+      ${toDelete.length>0?`<div style="background:var(--rl);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--red);margin-bottom:10px">
+        ⚠️ <b>${toDelete.length}</b> transaksi yang di-<i>uncheck</i> akan <b>dihapus permanen</b> dari database.
       </div>`:''}
-      ${toAdd.length===0?`<div class="empty"><div class="ei">✅</div>Tidak ada transaksi baru — semua sudah tercatat di database.</div>`:''}
+      ${(toAdd.length===0&&toDelete.length===0)?`<div class="empty"><div class="ei">✅</div>Tidak ada perubahan — semua sudah sesuai.</div>`:''}
     </div>
 
-    ${toAdd.length>0?`
+    ${(byWeekHTML&&(toAdd.length>0||toDelete.length>0))?`
     <div class="cd">
       <div class="sec">Rincian per Minggu</div>
       ${byWeekHTML}
-    </div>
+    </div>`:''}
 
+    ${(toAdd.length>0||toDelete.length>0)?`
     <div class="cd" style="background:var(--gp);border:1.5px solid var(--gm)">
-      <div style="font-size:13px;color:var(--g);font-weight:700;margin-bottom:6px">📝 Catatan Penyimpanan</div>
+      <div style="font-size:13px;color:var(--g);font-weight:700;margin-bottom:6px">📝 Catatan</div>
       <div style="font-size:12px;color:var(--tm);line-height:1.7">
-        • Tanggal transaksi akan dicatat sebagai <b>hari ini</b><br>
-        • ${isOnline?'Data akan langsung disimpan ke Firebase ☁️':'Data akan disimpan offline dan sync saat online 📤'}<br>
-        • Data yang sudah ada di database <b>tidak akan diduplikat</b>
+        • Tanggal transaksi baru dicatat sesuai tanggal minggu bersangkutan<br>
+        • ${isOnline?'Data langsung disimpan ke Firebase ☁️':'Data disimpan offline dan sync saat online 📤'}
       </div>
     </div>
-
-    <button onclick="_imSimpan()" style="width:100%;padding:14px;background:var(--g);color:#fff;border:none;border-radius:var(--rs);font-size:15px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;margin-top:4px">
-      💾 Simpan ${toAdd.length} Transaksi
+    <button onclick="_imSimpanV2(${JSON.stringify(allHapusIds)})" style="width:100%;padding:14px;background:var(--g);color:#fff;border:none;border-radius:var(--rs);font-size:15px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;margin-top:4px">
+      💾 Simpan (${toAdd.length>0?'+'+toAdd.length+' tambah':''}${toDelete.length>0?(toAdd.length>0?' · ':'')+'−'+toDelete.length+' hapus':''})
     </button>`:''}
 
     <button onclick="go('home')" style="width:100%;padding:12px;background:#fff;color:var(--tm);border:1.5px solid var(--b);border-radius:var(--rs);font-size:14px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;margin-top:10px">
@@ -4275,14 +4172,12 @@ function _imStep3(){
 }
 
 function _weekKeyToDate(k){
-  // Ambil tanggal representatif dari weekKey: hari Rabu (tengah minggu) di minggu tsb
-  // Format weekKey: "YYYY-Wn-m" misal "2024-W1-11" = tahun 2024, minggu 1, bulan 11 (Des)
+  // Tanggal representatif = hari Minggu di tengah periode (hari Minggu ke-N bulan itu)
+  const sun=_sundayOfWeekKey(k);
+  if(sun) return sun;
+  // Fallback jika weekKey tidak valid
   const [y,wn,m]=k.split('-');
-  const minggu=parseInt(wn.replace('W',''));
-  const tglMulai=(minggu-1)*7+1; // tgl pertama minggu itu
-  const tglTengah=Math.min(tglMulai+2, new Date(+y,+m+1,0).getDate()); // +2 = Rabu, clamp ke akhir bulan
-  const d=new Date(+y, +m, tglTengah, 12, 0, 0);
-  return d;
+  return new Date(+y,+m,1,12,0,0);
 }
 
 function _imSimpan(){
@@ -4891,6 +4786,379 @@ function _hapusKegiatan(id){
   saveMEM();
   showToast('🗑️ Kegiatan dihapus');
   _renderDaftarKegiatan();
+}
+
+// ════════════════════════════════════════════════════════════
+// ADMIN — RESET SEMUA TRANSAKSI + REKAP EDIT
+// ════════════════════════════════════════════════════════════
+function adminResetSemuaTrx(){
+  if(CU.role!=='admin')return;
+  const total=MEM.transaksi.length;
+  const totalRekap=Object.keys(MEM.rekapEdit||{}).length;
+  // Konfirmasi langkah 1
+  const ok1=confirm(
+    '⚠️ HAPUS SEMUA TRANSAKSI?\n\n'+
+    '• '+total+' transaksi akan dihapus\n'+
+    '• '+totalRekap+' entri rekap edit akan dihapus\n'+
+    '• Data warga, akun, kas, absen TIDAK terpengaruh\n\n'+
+    'Klik OK untuk lanjut ke konfirmasi akhir.'
+  );
+  if(!ok1)return;
+  // Konfirmasi langkah 2
+  const ok2=confirm(
+    '🔴 KONFIRMASI AKHIR\n\n'+
+    'Tindakan ini TIDAK BISA DIBATALKAN.\n\n'+
+    'Ketik "YA" di bawah untuk konfirmasi.\n\n'+
+    'Klik OK jika Anda sudah yakin.'
+  );
+  if(!ok2)return;
+  const konfirmasi=prompt('Ketik  HAPUS  (huruf kapital) untuk melanjutkan:');
+  if(konfirmasi!=='HAPUS'){showToast('❌ Dibatalkan — teks tidak cocok');return;}
+
+  // Eksekusi reset
+  MEM.transaksi=[];
+  MEM.rekapEdit={};
+  // Simpan transaksi ke Firebase
+  if(isOnline){
+    _db.ref('jmpData/transaksi').set([]).catch(e=>console.warn(e));
+    _db.ref('jmpData/rekapEdit').set({}).catch(e=>console.warn(e));
+    saveMEM();
+    showToast('✅ Semua transaksi & rekap edit berhasil dihapus!');
+  } else {
+    showToast('⚠️ Offline — akan sync saat online');
+  }
+  offQ=[]; saveQ(); updateSyncPill();
+  pgAdmin();
+}
+
+// ════════════════════════════════════════════════════════════
+// ADMIN — HAPUS TRANSAKSI PER BULAN/MINGGU
+// ════════════════════════════════════════════════════════════
+let _hpState={selWeeks:[]};
+
+function adminHapusPeriode(){
+  if(CU.role!=='admin')return;
+  _hpState={selWeeks:[]};
+  _renderHapusPeriode();
+}
+
+function _renderHapusPeriode(){
+  const monthsFull=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const now=new Date();
+  // Kumpulkan semua bulan yang ada transaksi
+  const bulanSet={};
+  MEM.transaksi.filter(t=>!t.isCredit).forEach(t=>{
+    if(!t.weekKey)return;
+    const [y,wn,m]=t.weekKey.split('-');
+    const bKey=`${y}-${m}`;
+    if(!bulanSet[bKey]) bulanSet[bKey]={y:+y,m:+m,label:`${monthsFull[+m]} ${y}`,weeks:{}};
+    bulanSet[bKey].weeks[t.weekKey]=(bulanSet[bKey].weeks[t.weekKey]||0)+1;
+  });
+
+  const bulanList=Object.values(bulanSet).sort((a,b)=>(b.y*100+b.m)-(a.y*100+a.m));
+
+  if(bulanList.length===0){
+    const mc=document.getElementById('MC');
+    mc.innerHTML=`<button class="back-btn" onclick="pgAdmin()">← Admin Panel</button>
+    <div class="ct">📅 Hapus Transaksi per Periode</div>
+    <div class="cd"><div class="empty"><div class="ei">📭</div>Belum ada transaksi untuk dihapus</div></div>`;
+    return;
+  }
+
+  const dropHTML=bulanList.map(b=>{
+    const weekKeys=Object.keys(b.weeks);
+    const selDiBulan=weekKeys.filter(k=>_hpState.selWeeks.includes(k)).length;
+    const allSel=selDiBulan===weekKeys.length;
+    return`<div style="border:1.5px solid ${selDiBulan>0?'#e67e22':'var(--b)'};border-radius:10px;overflow:hidden;background:${selDiBulan>0?'#fff8f0':'#fff'};margin-bottom:6px">
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer" onclick="_hpTogglePanel('${b.y}-${b.m}')">
+        <input type="checkbox" ${allSel&&weekKeys.length>0?'checked':''} id="_hpCbBln_${b.y}-${b.m}"
+          onclick="event.stopPropagation();_hpToggleBulan('${b.y}','${b.m}',this.checked)"
+          style="width:16px;height:16px;accent-color:#e67e22;flex-shrink:0">
+        <span style="font-weight:700;font-size:13px;flex:1;color:${selDiBulan>0?'#c0510a':'var(--t)'}">${b.label}</span>
+        <span style="font-size:11px;color:${selDiBulan>0?'#e67e22':'var(--tl)'};font-weight:700">
+          ${selDiBulan>0?selDiBulan+'/'+weekKeys.length+' minggu dipilih':''}
+        </span>
+        <span style="font-size:12px;color:var(--tl)">▼</span>
+      </div>
+      <div id="_hpWks_${b.y}-${b.m}" style="display:none;border-top:1px solid var(--b);padding:8px 14px;flex-direction:column;gap:4px">
+        ${weekKeys.sort().map(wk=>{
+          const cnt=b.weeks[wk];
+          const sel=_hpState.selWeeks.includes(wk);
+          return`<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:3px 0">
+            <input type="checkbox" value="${wk}" ${sel?'checked':''}
+              onchange="_hpToggleWeek(this)"
+              style="width:15px;height:15px;accent-color:#e67e22">
+            <span style="font-size:12px;color:${sel?'#c0510a':'var(--t)'};font-weight:${sel?'700':'400'}">${weekLabel(wk)}</span>
+            <span style="font-size:11px;color:var(--tl);margin-left:auto">${cnt} transaksi</span>
+          </label>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Hitung preview
+  const totalSel=_hpState.selWeeks.length;
+  const trxDipilih=MEM.transaksi.filter(t=>!t.isCredit&&_hpState.selWeeks.includes(t.weekKey));
+  const totalNom=trxDipilih.reduce((s,t)=>s+t.nominal,0);
+
+  document.getElementById('MC').innerHTML=`
+    <button class="back-btn" onclick="pgAdmin()">← Admin Panel</button>
+    <div class="ct">📅 Hapus Transaksi per Periode</div>
+    <div class="cd">
+      <p style="font-size:12px;color:var(--tm);margin-bottom:12px">Pilih minggu yang ingin dihapus. Klik nama bulan untuk expand/collapse.</p>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px">
+        <button onclick="_hpSelectAll()" style="padding:6px 13px;border-radius:16px;border:1.5px solid #e67e22;background:#fff8f0;color:#c0510a;font-size:12px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">✓ Semua</button>
+        <button onclick="_hpClearAll()" style="padding:6px 13px;border-radius:16px;border:1.5px solid var(--b);background:#fff;color:var(--red);font-size:12px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">✕ Reset</button>
+      </div>
+      <div>${dropHTML}</div>
+    </div>
+    ${totalSel>0?`
+    <div class="cd" style="background:#fff8f0;border:1.5px solid #f0b87e">
+      <div style="font-size:13px;color:#c0510a;font-weight:700;margin-bottom:6px">📋 Preview Penghapusan</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div style="background:#fff;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:22px;font-weight:800;color:#c0510a">${trxDipilih.length}</div>
+          <div style="font-size:11px;color:var(--tl)">Transaksi</div>
+        </div>
+        <div style="background:#fff;border-radius:8px;padding:10px;text-align:center">
+          <div style="font-size:18px;font-weight:800;color:#c0510a">${rpFmt(totalNom)}</div>
+          <div style="font-size:11px;color:var(--tl)">Total Nominal</div>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--tm);margin-top:8px">Periode: ${totalSel} minggu dipilih</div>
+    </div>
+    <button onclick="_hpEksekusi()" style="width:100%;padding:14px;background:#e67e22;color:#fff;border:none;border-radius:var(--rs);font-size:15px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;margin-top:4px">
+      🗑️ Hapus ${trxDipilih.length} Transaksi Ini
+    </button>`:''}`;
+
+  // Set indeterminate untuk bulan sebagian
+  bulanList.forEach(b=>{
+    const weekKeys=Object.keys(b.weeks);
+    const selDiBulan=weekKeys.filter(k=>_hpState.selWeeks.includes(k)).length;
+    const cb=document.getElementById('_hpCbBln_'+b.y+'-'+b.m);
+    if(cb && selDiBulan>0 && selDiBulan<weekKeys.length) cb.indeterminate=true;
+  });
+}
+
+function _hpTogglePanel(bKey){
+  const el=document.getElementById('_hpWks_'+bKey);
+  if(!el)return;
+  el.style.display=el.style.display==='none'?'flex':'none';
+}
+function _hpToggleBulan(y,m,val){
+  const wks=[...new Set(MEM.transaksi.filter(t=>!t.isCredit&&t.weekKey).map(t=>{
+    const [ty,twn,tm]=t.weekKey.split('-');
+    return (ty===String(y)&&tm===String(m))?t.weekKey:null;
+  }).filter(Boolean))];
+  wks.forEach(k=>{
+    if(val){ if(!_hpState.selWeeks.includes(k)) _hpState.selWeeks.push(k); }
+    else { _hpState.selWeeks=_hpState.selWeeks.filter(x=>x!==k); }
+  });
+  _renderHapusPeriode();
+}
+function _hpToggleWeek(cb){
+  const k=cb.value;
+  if(cb.checked){ if(!_hpState.selWeeks.includes(k)) _hpState.selWeeks.push(k); }
+  else { _hpState.selWeeks=_hpState.selWeeks.filter(x=>x!==k); }
+  _renderHapusPeriode();
+}
+function _hpSelectAll(){
+  _hpState.selWeeks=[...new Set(MEM.transaksi.filter(t=>!t.isCredit&&t.weekKey).map(t=>t.weekKey))];
+  _renderHapusPeriode();
+}
+function _hpClearAll(){ _hpState.selWeeks=[]; _renderHapusPeriode(); }
+
+function _hpEksekusi(){
+  if(_hpState.selWeeks.length===0){showToast('❌ Pilih minimal 1 minggu');return;}
+  const trxDipilih=MEM.transaksi.filter(t=>!t.isCredit&&_hpState.selWeeks.includes(t.weekKey));
+  if(trxDipilih.length===0){showToast('❌ Tidak ada transaksi ditemukan');return;}
+  const ok=confirm(
+    '⚠️ Konfirmasi Hapus\n\n'+
+    trxDipilih.length+' transaksi dari '+_hpState.selWeeks.length+' minggu akan dihapus permanen.\n\n'+
+    'Klik OK untuk lanjut.'
+  );
+  if(!ok)return;
+  const ok2=confirm('🔴 KONFIRMASI AKHIR — Tindakan ini tidak bisa dibatalkan.\nKlik OK untuk eksekusi.');
+  if(!ok2)return;
+  // Hapus dari array (hanya transaksi non-credit di minggu terpilih)
+  const idsHapus=new Set(trxDipilih.map(t=>t.id));
+  MEM.transaksi=MEM.transaksi.filter(t=>!idsHapus.has(t.id));
+  // Hapus rekapEdit untuk minggu yang dihapus
+  _hpState.selWeeks.forEach(wk=>{
+    if(MEM.rekapEdit&&MEM.rekapEdit[wk]) delete MEM.rekapEdit[wk];
+    Object.keys(MEM.rekapEdit||{}).forEach(k=>{ if(k.startsWith(wk)) delete MEM.rekapEdit[k]; });
+  });
+  if(isOnline){
+    saveTrx();
+    _db.ref('jmpData/rekapEdit').set(MEM.rekapEdit||{}).catch(e=>console.warn(e));
+    showToast('✅ '+idsHapus.size+' transaksi berhasil dihapus!');
+  } else {
+    showToast('⚠️ Offline — akan sync saat online');
+  }
+  _hpState.selWeeks=[];
+  pgAdmin();
+}
+
+// ════════════════════════════════════════════════════════════
+// WARGA — DETAIL TRANSAKSI PER MINGGU (ADMIN)
+// ════════════════════════════════════════════════════════════
+function showWargaWeekDetail(wid){
+  if(CU.role!=='admin'&&CU.role!=='divisi')return;
+  const w=MEM.warga.find(x=>x.id===wid); if(!w)return;
+
+  // Kumpulkan semua weekKey yang relevan (ada transaksi ATAU tunggakan)
+  const weekSet=new Set();
+  MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).forEach(t=>{ if(t.weekKey) weekSet.add(t.weekKey); });
+  debtWeeks(wid).forEach(k=>weekSet.add(k));
+
+  const weeks=[...weekSet].sort((a,b)=>b.localeCompare(a));
+  const tot=MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
+
+  const rowsHTML=weeks.length===0
+    ?'<div class="empty"><div class="ei">📭</div>Belum ada riwayat</div>'
+    :weeks.map(k=>{
+      const trxList=MEM.transaksi.filter(t=>t.wargaId===wid&&t.weekKey===k&&!t.isCredit);
+      const isDebt=debtWeeks(wid).includes(k);
+      const status=trxList.length>0?'✅ Bayar':isDebt?'⚠️ Tunggak':'— Belum';
+      const statusColor=trxList.length>0?'var(--g)':isDebt?'#c0392b':'var(--tl)';
+      const totalNom=trxList.reduce((s,t)=>s+t.nominal,0);
+      return`<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--b)">
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:700;color:var(--t)">${weekLabel(k)}</div>
+          ${trxList.length>0?`<div style="font-size:11px;color:var(--tl);margin-top:2px">${trxList.map(t=>{const u=MEM.users.find(x=>x.id===t.userId);return(u?.name||'-')+' · '+new Date(t.date).toLocaleDateString('id-ID');}).join(' | ')}</div>`:''}
+        </div>
+        <div style="text-align:right;min-width:70px">
+          <div style="font-size:12px;font-weight:700;color:${statusColor}">${status}</div>
+          ${totalNom>0?`<div style="font-size:11px;color:var(--tl)">${rpFmt(totalNom)}</div>`:''}
+        </div>
+        <div style="display:flex;gap:4px;flex-shrink:0">
+          ${trxList.length>0
+            ?`<button onclick="_wwdHapusWeek('${wid}','${k}')" title="Hapus transaksi minggu ini"
+                style="padding:5px 9px;background:var(--rl);color:var(--red);border:none;border-radius:7px;cursor:pointer;font-size:13px">🗑️</button>`
+            :`<button onclick="_wwdTambahWeek('${wid}','${k}')" title="Tambah transaksi minggu ini"
+                style="padding:5px 9px;background:var(--gp);color:var(--g);border:none;border-radius:7px;cursor:pointer;font-size:13px">➕</button>`}
+        </div>
+      </div>`;
+    }).join('');
+
+  // Tampilkan sebagai overlay modal
+  const modal=document.createElement('div');
+  modal.id='_wwdModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;display:flex;align-items:flex-end;justify-content:center;padding:0 0 0 0';
+  modal.innerHTML=`
+    <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:600px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:16px 18px 12px;border-bottom:1px solid var(--b);display:flex;align-items:center;gap:10px">
+        <div class="av" style="width:40px;height:40px;font-size:16px;flex-shrink:0">${w.name[0]}</div>
+        <div style="flex:1">
+          <div style="font-family:'Playfair Display',serif;font-size:16px;color:var(--g)">${w.name}</div>
+          <div style="font-size:11px;color:var(--tl)">${w.rt} · Total ${rpFmt(tot)}</div>
+        </div>
+        <button onclick="document.getElementById('_wwdModal').remove()"
+          style="background:#f0f0f0;border:none;border-radius:50%;width:32px;height:32px;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center">✕</button>
+      </div>
+      <div style="padding:12px 18px 4px;display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:12px;font-weight:700;color:var(--tm)">Riwayat per Minggu</div>
+        <button onclick="_wwdTambahWeekBaru('${wid}')" style="padding:5px 12px;background:var(--g);color:#fff;border:none;border-radius:12px;font-size:12px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">➕ Tambah Minggu</button>
+      </div>
+      <div style="padding:0 18px 18px;overflow-y:auto;flex:1" id="_wwdBody">
+        ${rowsHTML}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+function _wwdHapusWeek(wid,weekKey){
+  const w=MEM.warga.find(x=>x.id===wid);
+  const trxList=MEM.transaksi.filter(t=>t.wargaId===wid&&t.weekKey===weekKey&&!t.isCredit);
+  if(!confirm('Hapus '+trxList.length+' transaksi milik '+w.name+' di '+weekLabel(weekKey)+'?'))return;
+  const ids=new Set(trxList.map(t=>t.id));
+  MEM.transaksi=MEM.transaksi.filter(t=>!ids.has(t.id));
+  if(isOnline){ saveTrx(); }
+  showToast('✅ '+ids.size+' transaksi dihapus');
+  document.getElementById('_wwdModal').remove();
+  showWargaWeekDetail(wid);
+}
+
+function _wwdTambahWeek(wid,weekKey){
+  const w=MEM.warga.find(x=>x.id===wid);
+  if(!confirm('Tambah pembayaran '+w.name+' untuk '+weekLabel(weekKey)+'?\nNominal: '+rpFmt(MEM.nominal)))return;
+  const tgl=_weekKeyToDate(weekKey).toISOString();
+  const trx={id:'TM'+Date.now()+'_'+Math.random().toString(36).substr(2,5),wargaId:wid,userId:CU.id,nominal:MEM.nominal,date:tgl,weekKey,isCredit:false,isDebt:false,isMassal:false};
+  MEM.transaksi.push(trx);
+  if(!isOnline) offQ.push(trx);
+  if(isOnline){ saveTrx(); } else { saveQ(); updateSyncPill(); }
+  showToast('✅ Transaksi ditambahkan!');
+  document.getElementById('_wwdModal').remove();
+  showWargaWeekDetail(wid);
+}
+
+function _wwdTambahWeekBaru(wid){
+  // Pilih minggu dari daftar semua minggu yang belum ada transaksi
+  const bulanKeys=[...new Set(MEM.transaksi.filter(t=>t.weekKey).map(t=>{const[y,wn,m]=t.weekKey.split('-');return`${y}-${m}`;}))];
+  // Tampilkan simple prompt untuk pilih weekKey
+  const wkTersedia=[];
+  const now=new Date();
+  for(let i=0;i<12;i++){
+    const d=new Date(now.getFullYear(),now.getMonth()-i,1);
+    getWeeksForMonth(d.getMonth(),d.getFullYear()).forEach(k=>{
+      const sudahAda=MEM.transaksi.some(t=>t.wargaId===wid&&t.weekKey===k&&!t.isCredit);
+      if(!sudahAda) wkTersedia.push(k);
+    });
+  }
+  if(wkTersedia.length===0){showToast('Semua minggu sudah memiliki transaksi');return;}
+  const pil=prompt('Pilih nomor minggu yang ingin ditambahkan:\n\n'+wkTersedia.slice(0,20).map((k,i)=>`${i+1}. ${weekLabel(k)}`).join('\n')+'\n\nKetik nomornya:');
+  const idx=parseInt(pil)-1;
+  if(isNaN(idx)||idx<0||idx>=wkTersedia.length){showToast('❌ Pilihan tidak valid');return;}
+  _wwdTambahWeek(wid, wkTersedia[idx]);
+}
+
+
+
+function _imSimpanV2(idsHapus){
+  const toAdd=_im._toAdd||[];
+  const wargaList = _im.rt==='Semua' ? MEM.warga : MEM.warga.filter(w=>w.rt===_im.rt);
+  const weeks=_im.selWeeks;
+  const nom=MEM.nominal;
+
+  if(idsHapus&&idsHapus.length>0){
+    const ok=confirm('⚠️ Konfirmasi: '+idsHapus.length+' transaksi akan DIHAPUS permanen. Lanjutkan?');
+    if(!ok)return;
+  }
+
+  // Hapus transaksi yang di-uncheck
+  if(idsHapus&&idsHapus.length>0){
+    const setHapus=new Set(idsHapus);
+    MEM.transaksi=MEM.transaksi.filter(t=>!setHapus.has(t.id));
+  }
+
+  // Tambah transaksi baru
+  const _ts=Date.now();
+  let added=0;
+  toAdd.forEach((item,idx)=>{
+    const sudahAda=MEM.transaksi.some(t=>t.wargaId===item.wid&&t.weekKey===item.weekKey&&!t.isCredit);
+    if(!sudahAda){
+      const tglMinggu=_weekKeyToDate(item.weekKey).toISOString();
+      const trx={
+        id:`TM${_ts}_${idx}_${Math.random().toString(36).substr(2,5)}`,
+        wargaId:item.wid, userId:CU.id,
+        nominal:nom, date:tglMinggu, weekKey:item.weekKey,
+        isCredit:false, isDebt:false, isOffline:!isOnline, isMassal:true
+      };
+      MEM.transaksi.push(trx);
+      if(!isOnline) offQ.push(trx);
+      added++;
+    }
+  });
+
+  if(isOnline){
+    saveTrx();
+    showToast(`✅ ${added} ditambahkan${idsHapus&&idsHapus.length>0?', '+idsHapus.length+' dihapus':''}`);
+  } else {
+    saveQ(); updateSyncPill();
+    showToast(`📤 ${added} transaksi offline tersimpan`);
+  }
+  _im={step:1,selWeeks:[],rt:'RT 01',wargaChecked:{},_toAdd:[]};
+  go('home');
 }
 
 </script>
