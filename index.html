@@ -780,17 +780,51 @@ window.addEventListener('offline',()=>{
 // Fallback ke 1 Januari 2025 jika belum ada data.
 // Ini memastikan tunggakan dihitung sejak data pertama masuk, bukan tanggal hardcode.
 function getStartDate(){
-  if(!Array.isArray(MEM.transaksi)||MEM.transaksi.length===0) return new Date('2024-12-01');
+  if(!Array.isArray(MEM.transaksi)||MEM.transaksi.length===0){
+    return new Date(2024,11,1); // 1 Des 2024 lokal
+  }
   const nonCredit=MEM.transaksi.filter(t=>!t.isCredit&&t.date);
-  if(nonCredit.length===0) return new Date('2024-12-01');
+  if(nonCredit.length===0) return new Date(2024,11,1);
   const oldest=nonCredit.reduce((min,t)=>new Date(t.date)<new Date(min.date)?t:min);
-  const oldestDate=new Date(oldest.date);
-  // Jika transaksi tertua lebih muda dari Des 2024, tetap pakai Des 2024
-  const defaultStart=new Date('2024-12-01');
+  const dp=oldest.date.slice(0,10).split('-');
+  const oldestDate=new Date(parseInt(dp[0]),parseInt(dp[1])-1,parseInt(dp[2]));
+  const defaultStart=new Date(2024,11,1);
   return oldestDate < defaultStart ? oldestDate : defaultStart;
 }
-// START_DATE dipakai di expectedWeeks — gunakan getter agar selalu fresh
 Object.defineProperty(window,'START_DATE',{get:()=>getStartDate(),configurable:true});
+
+function expectedWeeks(wid){
+  // Tentukan startFrom
+  let startFrom=START_DATE;
+  if(wid){
+    const w=MEM.warga.find(x=>x.id===wid);
+    if(w&&w.startDate){
+      // Paksa local time agar tidak kena UTC offset
+      const parts=w.startDate.split('-');
+      const sd=new Date(parseInt(parts[0]),parseInt(parts[1])-1,parseInt(parts[2]));
+      if(!isNaN(sd)) startFrom=sd;
+    }
+  }
+  const weeks=[];
+  const now=new Date();
+  // Geser ke hari Minggu yang menaungi startFrom (lokal)
+  const cur=new Date(startFrom.getFullYear(), startFrom.getMonth(), startFrom.getDate());
+  const curDay=cur.getDay();
+  if(curDay===0){
+    // sudah Minggu
+  } else if(curDay<=4){
+    cur.setDate(cur.getDate()-curDay); // mundur ke Minggu
+  } else {
+    cur.setDate(cur.getDate()+(7-curDay)); // maju ke Minggu berikutnya
+  }
+  while(cur<=now){
+    const k=weekKey(new Date(cur));
+    if(!weeks.includes(k)&&isWeekClosed(k)) weeks.push(k);
+    cur.setDate(cur.getDate()+7);
+  }
+  return [...new Set(weeks)];
+}
+
 
 // ── WEEK KEY LOGIC ───────────────────────────────────────────
 // Sistem: 1 minggu = Jumat s/d Kamis
@@ -883,38 +917,6 @@ function isWeekClosed(weekK){
   return new Date()>batas;
 }
 
-function expectedWeeks(wid){
-  let startFrom=START_DATE;
-  if(wid){
-    const w=MEM.warga.find(x=>x.id===wid);
-    if(w&&w.startDate){
-      const sd=new Date(w.startDate+'T00:00:00');
-      if(!isNaN(sd)) startFrom=sd;
-    }
-  }
-  // Iterasi per minggu: mulai dari weekKey startFrom,
-  // lalu maju 7 hari (ke hari Minggu berikutnya) sampai sekarang
-  const weeks=[];
-  const now=new Date();
-  // Temukan hari Minggu pertama pada atau setelah startFrom
-  const cur=new Date(startFrom);
-  const curDay=cur.getDay();
-  if(curDay===0){
-    // Sudah hari Minggu — mulai dari sini
-  } else if(curDay<=4){
-    // Sen-Kam: mundur ke Minggu sebelumnya (masih periode yang sama)
-    cur.setDate(cur.getDate()-curDay);
-  } else {
-    // Jum-Sab: maju ke Minggu berikutnya
-    cur.setDate(cur.getDate()+(7-curDay));
-  }
-  while(cur<=now){
-    const k=weekKey(new Date(cur));
-    if(!weeks.includes(k)&&isWeekClosed(k)) weeks.push(k);
-    cur.setDate(cur.getDate()+7);
-  }
-  return [...new Set(weeks)];
-}
 function paidWeeks(wid){ return MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit&&!t.isDebt).map(t=>t.weekKey); }
 function debtWeeks(wid){
   const w=MEM.warga.find(x=>x.id===wid);
