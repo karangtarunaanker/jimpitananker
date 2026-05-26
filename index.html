@@ -867,7 +867,10 @@ function thisWeek(){ return weekKey(); }
 // Ambil tanggal hari Minggu dari weekKey
 function _sundayOfWeekKey(wk){
   if(!wk||wk==='KREDIT') return null;
-  const [y,wn,m]=wk.split('-').map(Number);
+  const parts=wk.split('-');
+  const y=parseInt(parts[0]);
+  const wn=parseInt(parts[1].replace('W',''));
+  const m=parseInt(parts[2]);
   const firstSun=_firstSundayOfMonth(y,m);
   const sun=new Date(firstSun);
   sun.setDate(firstSun.getDate()+(wn-1)*7);
@@ -1756,13 +1759,30 @@ function diagTunggakan(){
   const el=document.getElementById('tList'); if(!el)return;
   const sample=MEM.warga.slice(0,5);
   const expGlobal=expectedWeeks(null);
+
+  // Debug iterasi manual
+  const sd=START_DATE;
+  const cur2=new Date(sd.getFullYear(),sd.getMonth(),sd.getDate());
+  const curDay2=cur2.getDay();
+  if(curDay2===0){}
+  else if(curDay2<=4) cur2.setDate(cur2.getDate()-curDay2);
+  else cur2.setDate(cur2.getDate()+(7-curDay2));
+  const now2=new Date();
+  const wk0=weekKey(new Date(cur2));
+  const thu0=_thursdayOfWeekKey(wk0);
+  const closed0=isWeekClosed(wk0);
+
   let html=`<div style="background:#1e1e2e;color:#cdd6f4;font-family:'JetBrains Mono',monospace;font-size:11px;padding:14px;border-radius:10px;white-space:pre-wrap;line-height:1.7">`;
   html+=`=== DIAGNOSIS TUNGGAKAN ===\n`;
   html+=`Total warga      : ${MEM.warga.length}\n`;
   html+=`Total transaksi  : ${MEM.transaksi.length}\n`;
-  html+=`START_DATE global: ${START_DATE.toISOString().slice(0,10)}\n`;
-  html+=`expectedWeeks    : ${expGlobal.length} minggu\n`;
-  html+=`Range            : ${expGlobal[0]} ... ${expGlobal[expGlobal.length-1]}\n\n`;
+  html+=`START_DATE       : ${sd.toLocaleDateString('id-ID')} (getDay=${sd.getDay()})\n`;
+  html+=`cur awal iterasi : ${cur2.toLocaleDateString('id-ID')} (getDay=${cur2.getDay()})\n`;
+  html+=`cur <= now       : ${cur2<=now2}\n`;
+  html+=`weekKey pertama  : ${wk0}\n`;
+  html+=`thursday pertama : ${thu0?thu0.toLocaleDateString('id-ID'):'null'}\n`;
+  html+=`isWeekClosed[0]  : ${closed0}\n`;
+  html+=`expectedWeeks    : ${expGlobal.length} minggu\n\n`;
   sample.forEach(w=>{
     const ex=isExempt(w);
     const ew=expectedWeeks(w.id);
