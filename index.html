@@ -492,8 +492,8 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
         </select>
         <div style="position:relative">
           <input id="mt_search" class="fi" placeholder="Ketik nama..." autocomplete="off"
-            oninput="filterMtWarga()" onfocus="document.getElementById('mt_drop').style.display='block'"
-            onblur="setTimeout(()=>document.getElementById('mt_drop').style.display='none',200)"
+            oninput="filterMtWarga()" onfocus="filterMtWarga()"
+            onblur="setTimeout(()=>document.getElementById('mt_drop').style.display='none',400)"
             style="margin:0">
           <div id="mt_drop" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #ddd;border-radius:8px;max-height:160px;overflow-y:auto;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.1)"></div>
         </div>
@@ -773,19 +773,39 @@ window.addEventListener('offline',()=>{
 const START_DATE = new Date('2026-05-06');
 
 // ── WEEK KEY LOGIC ───────────────────────────────────────────
-// Minggu dihitung per tanggal: Mgg1=1-7, Mgg2=8-14, Mgg3=15-21, Mgg4=22-28, Mgg5=29-31
-// weekKey pakai tanggal ASLI (tidak digeser), agar key konsisten antara simpan & baca
-function weekKey(date){
-  const d=date||new Date();
-  return `${d.getFullYear()}-W${Math.ceil(d.getDate()/7)}-${d.getMonth()}`;
+// Sistem baru: minggu dihitung berdasarkan hari MINGGU yang jatuh di bulan itu
+// Minggu ke-N = minggu kalender yang mengandung hari Minggu ke-N di bulan tersebut
+// weekKey format: "YYYY-WN-M" (sama seperti sebelumnya agar kompatibel)
+
+// Cari hari Minggu pertama di bulan tertentu
+function _firstSundayOfMonth(year, mon){
+  const d=new Date(year,mon,1);
+  // Geser ke hari Minggu pertama
+  while(d.getDay()!==0) d.setDate(d.getDate()+1);
+  return new Date(d);
 }
 
-// Untuk menyimpan transaksi: Senin-Kamis → weekKey hari ini
+// Konversi tanggal ke weekKey berdasarkan hari Minggu
+function weekKey(date){
+  const d=date?new Date(date):new Date();
+  const y=d.getFullYear(), m=d.getMonth();
+  const firstSun=_firstSundayOfMonth(y,m);
+  // Hitung minggu ke berapa: berapa hari Minggu sudah lewat sejak awal bulan
+  // Tgl sebelum hari Minggu pertama → masuk minggu 1 juga (pra-minggu pertama)
+  if(d<firstSun){
+    return `${y}-W1-${m}`;
+  }
+  const diffDays=Math.floor((d-firstSun)/(1000*60*60*24));
+  const wn=Math.floor(diffDays/7)+1;
+  return `${y}-W${wn}-${m}`;
+}
+
+// Untuk menyimpan transaksi: Senin-Kamis → weekKey minggu ini (hari Minggu terakhir)
 //                            Jumat-Sabtu → weekKey minggu depan (Minggu berikutnya)
 function weekKeyForSave(date){
-  const d=date||new Date();
+  const d=date?new Date(date):new Date();
   const day=d.getDay(); // 0=Min,1=Sen,2=Sel,3=Rab,4=Kam,5=Jum,6=Sab
-  if(day>=5){ // Jumat atau Sabtu → geser ke Minggu depan
+  if(day>=5){ // Jumat atau Sabtu → geser ke hari Minggu berikutnya
     const next=new Date(d);
     next.setDate(d.getDate()+(7-day));
     return weekKey(next);
@@ -793,8 +813,18 @@ function weekKeyForSave(date){
   return weekKey(d);
 }
 
-// thisWeek = weekKey untuk input SEKARANG (pakai logika geser Jumat)
+// thisWeek = weekKey untuk input SEKARANG
 function thisWeek(){ return weekKeyForSave(); }
+
+// Ambil tanggal hari Minggu dari weekKey (untuk referensi)
+function _sundayOfWeekKey(wk){
+  if(!wk||wk==='KREDIT') return null;
+  const [y,wn,m]=wk.split('-').map(Number);
+  const firstSun=_firstSundayOfMonth(y,m);
+  const sun=new Date(firstSun);
+  sun.setDate(firstSun.getDate()+(wn-1)*7);
+  return sun;
+}
 
 function weekLabel(k){
   if(k==='KREDIT') return 'Kredit';
@@ -812,35 +842,18 @@ function showToast(m,dur=2800){
 function closeModal(id){ const el=document.getElementById(id); if(el) el.classList.remove('show'); }
 function openModal(id){ const el=document.getElementById(id); if(el) el.classList.add('show'); }
 
-// Cek minggu sudah tutup = sudah lewat hari Jumat pada rentang tanggal minggu itu
-// Minggu ke-wn punya rentang tanggal (wn-1)*7+1 s/d wn*7
-// Jumat = tanggal manapun di rentang itu yang hari Jumat (day===5)
+// Cek minggu sudah tutup = sudah lewat Kamis setelah hari Minggu ke-N bulan itu
 function isWeekClosed(weekK){
-  const [y,wn,m]=weekK.split('-').map(Number);
-  const startDay=(wn-1)*7+1;
-  const endDay=Math.min(wn*7, new Date(y,m+1,0).getDate());
-  // Cari Kamis dalam rentang minggu ini (batas bayar = Kamis)
-  let batasKamis=null;
-  for(let d=startDay;d<=endDay;d++){
-    const dt=new Date(y,m,d);
-    if(dt.getDay()===4){ batasKamis=dt; break; }
-  }
-  // Jika tidak ada Kamis di rentang, cari Kamis setelah endDay
-  if(!batasKamis){
-    let d=endDay+1;
-    while(d<=endDay+7){
-      const dt=new Date(y,m,d);
-      if(dt.getDay()===4){ batasKamis=dt; break; }
-      d++;
-    }
-  }
-  if(!batasKamis) return true;
-  batasKamis.setHours(23,59,59,999);
-  return new Date()>batasKamis;
+  const sun=_sundayOfWeekKey(weekK);
+  if(!sun) return true;
+  // Kamis = hari Minggu + 4 hari
+  const kamis=new Date(sun);
+  kamis.setDate(sun.getDate()+4);
+  kamis.setHours(23,59,59,999);
+  return new Date()>kamis;
 }
 
 function expectedWeeks(wid){
-  // Ambil startDate warga jika ada, jika tidak pakai START_DATE global
   let startFrom=START_DATE;
   if(wid){
     const w=MEM.warga.find(x=>x.id===wid);
@@ -849,14 +862,15 @@ function expectedWeeks(wid){
       if(!isNaN(sd)) startFrom=sd;
     }
   }
-  // Generate semua minggu dari startFrom sampai sekarang
-  // Hanya yang sudah TUTUP (lewat Kamis) yang dihitung sebagai tunggakan
+  // Mulai dari hari Minggu pertama yang >= startFrom
   const weeks=[];
-  const cur=new Date(startFrom);
   const now=new Date();
+  const cur=new Date(startFrom);
+  // Geser ke hari Minggu berikutnya jika belum hari Minggu
+  if(cur.getDay()!==0) cur.setDate(cur.getDate()+(7-cur.getDay()));
   while(cur<=now){
-    const k=weekKey(cur);
-    if(!weeks.includes(k) && isWeekClosed(k)) weeks.push(k);
+    const k=weekKey(new Date(cur));
+    if(!weeks.includes(k)&&isWeekClosed(k)) weeks.push(k);
     cur.setDate(cur.getDate()+7);
   }
   return [...new Set(weeks)];
@@ -1170,9 +1184,19 @@ function pgHome(){
       <h2>Selamat Datang 👋</h2>
       <p>${today}</p>
     </div>
-    <div class="sg">
-      <div class="sb" style="text-align:center"><div class="sl">Total Uang Masuk</div><div class="sv gold">${rpFmt(all.totalRp)}</div></div>
-      <div class="sb" style="text-align:center"><div class="sl">Masuk Minggu Lalu</div><div class="sv">${rpFmt(all.prevWeekRp)}</div></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:12px">
+      <div class="sb" style="text-align:center;padding:8px 4px;min-width:0">
+        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Masuk</div>
+        <div style="font-size:11px;font-weight:800;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt(all.totalRp)}</div>
+      </div>
+      <div class="sb" style="text-align:center;padding:8px 4px;min-width:0">
+        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Keluar</div>
+        <div style="font-size:11px;font-weight:800;color:var(--red);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt((MEM.kasJimpitan||[]).reduce((s,r)=>s+(r.keluar||0),0))}</div>
+      </div>
+      <div class="sb" style="text-align:center;padding:8px 4px;min-width:0">
+        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Saldo</div>
+        <div style="font-size:11px;font-weight:800;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt(all.totalRp-(MEM.kasJimpitan||[]).reduce((s,r)=>s+(r.keluar||0),0))}</div>
+      </div>
     </div>
     ${isStaff||CU.role==='anggota'?`<div class="cd" style="margin-bottom:12px">
       <div class="ct">📍 Status pembayaran</div>
@@ -2620,6 +2644,18 @@ function pgAdmin(){
       </div>
     </div>
     <div class="cd">
+      <div class="sec">🔄 Migrasi WeekKey ke Sistem Hari Minggu</div>
+      <p style="font-size:12px;color:var(--tm);margin-bottom:10px;line-height:1.6">
+        Konversi semua weekKey lama (sistem tanggal 1-7) ke sistem baru (berdasarkan hari Minggu).
+        Transaksi tanpa tanggal valid akan dilewati dan ditandai.
+      </p>
+      <div id="_migrasiInfo" style="font-size:12px;color:var(--tl);margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="_cekMigrasi()" style="padding:9px 16px;background:var(--gp);color:var(--g);border:1.5px solid var(--gl);border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🔍 Cek Data</button>
+        <button onclick="_jalankanMigrasi()" id="_btnMigrasi" style="padding:9px 16px;background:#1a3a5c;color:#fff;border:none;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif;display:none">🔄 Migrasi Sekarang</button>
+      </div>
+    </div>
+    <div class="cd">
       <div class="sec" style="color:var(--red)">⚠️ Zona Bahaya</div>
       <p style="font-size:12px;color:var(--tm);margin-bottom:10px">Hapus antrian offline yang belum tersinkronisasi.</p>
       <button onclick="clearOffQ()" style="background:var(--red);color:#fff;border:none;padding:10px 16px;border-radius:var(--rs);font-size:13px;font-weight:700;cursor:pointer;font-family:'Plus Jakarta Sans',sans-serif">🗑️ Hapus Antrian Offline</button>
@@ -2661,6 +2697,95 @@ function saveEditUser(){
   saveMEM(); closeModal('moEditUser'); showToast('✅ Akun berhasil diperbarui!');
   if(curPage==='kelolaAkun') _renderKelolaAkun(); else pgAdmin();
 }
+function _weekKeyLamaToDate(wk){
+  // Konversi weekKey lama (sistem tanggal) ke tanggal tengah minggu
+  const [y,wn,m]=wk.split('-').map(Number);
+  const n=parseInt(wn);
+  const tglMulai=(n-1)*7+1;
+  const tglAkhir=Math.min(n*7,new Date(y,m+1,0).getDate());
+  const tglTengah=Math.floor((tglMulai+tglAkhir)/2);
+  return new Date(y,m,tglTengah);
+}
+
+function _isWeekKeyBaru(wk){
+  // Cek apakah weekKey sudah pakai sistem hari Minggu
+  // Caranya: konversi weekKey → tanggal Minggu → konversi balik → harus sama
+  if(!wk||wk==='KREDIT') return true;
+  const parts=wk.split('-');
+  if(parts.length!==3) return true;
+  const sun=_sundayOfWeekKey(wk);
+  if(!sun) return true;
+  const rebuilt=weekKey(sun);
+  return rebuilt===wk;
+}
+
+function _cekMigrasi(){
+  const el=document.getElementById('_migrasiInfo');
+  const btn=document.getElementById('_btnMigrasi');
+  if(!el) return;
+
+  const perlu=MEM.transaksi.filter(t=>{
+    if(!t.weekKey||t.weekKey==='KREDIT'||t.isCredit) return false;
+    return !_isWeekKeyBaru(t.weekKey);
+  });
+
+  const tanpaDate=perlu.filter(t=>{
+    if(!t.date) return true;
+    const d=new Date(t.date);
+    return isNaN(d);
+  });
+
+  const bisaMigrasi=perlu.length-tanpaDate.length;
+
+  if(!perlu.length){
+    el.innerHTML='<span style="color:var(--g);font-weight:700">✅ Semua data sudah pakai sistem hari Minggu.</span>';
+    if(btn) btn.style.display='none';
+  } else {
+    el.innerHTML=`<span style="color:var(--red);font-weight:700">⚠️ ${perlu.length} transaksi perlu dimigrasi</span><br>
+      <span style="color:var(--tm)">• ${bisaMigrasi} transaksi bisa dimigrasi otomatis<br>
+      • ${tanpaDate.length} transaksi tanpa tanggal valid (akan dilewati & ditandai)</span>`;
+    if(btn) btn.style.display='inline-block';
+  }
+}
+
+function _jalankanMigrasi(){
+  if(!confirm('Migrasi weekKey ke sistem hari Minggu?\nProses ini tidak bisa dibatalkan.')) return;
+  let migrated=0, skipped=0;
+
+  MEM.transaksi.forEach(t=>{
+    if(!t.weekKey||t.weekKey==='KREDIT'||t.isCredit) return;
+    if(_isWeekKeyBaru(t.weekKey)) return; // sudah sistem baru
+
+    // Coba ambil tanggal dari field date
+    let tDate=null;
+    if(t.date){
+      const d=new Date(t.date);
+      if(!isNaN(d)) tDate=d;
+    }
+
+    if(!tDate){
+      // Tanggal tidak valid — lewati, tandai
+      t._migrasiSkip=true;
+      skipped++;
+      return;
+    }
+
+    // Konversi: weekKey baru berdasarkan tanggal transaksi
+    const newKey=weekKey(tDate);
+    t.weekKey=newKey;
+    t._migrated=true;
+    migrated++;
+  });
+
+  if(isOnline){
+    saveTrx();
+    showToast(`✅ ${migrated} dimigrasi, ${skipped} dilewati`);
+  } else {
+    showToast(`⚠️ ${migrated} dimigrasi lokal — sync dulu agar tersimpan`);
+  }
+  _cekMigrasi();
+}
+
 function clearOffQ(){
   if(!confirm('Hapus semua antrian offline?'))return;
   offQ=[]; saveQ(); updateSyncPill(); showToast('🗑️ Antrian dihapus'); pgAdmin();
@@ -3029,24 +3154,71 @@ function pgRekapJimpitan(){
 }
 
 function _getWeekRanges(year, mon){
-  // Minggu patokan: Minggu s/d Kamis (jimpitan hari Minggu, batas Kamis)
-  // Bagi bulan jadi minggu: Mgg1=1-7, Mgg2=8-14, Mgg3=15-21, Mgg4=22-akhir
-  const lastDay=new Date(year,mon+1,0).getDate();
   const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
   const nmb=mn[mon];
-  return [
-    {mgg:1, start:new Date(year,mon,1),  end:new Date(year,mon,7,23,59,59),  label:`Minggu 1 ${nmb} ${year}`,    key:`${year}-W1-${mon}`},
-    {mgg:2, start:new Date(year,mon,8),  end:new Date(year,mon,14,23,59,59), label:`Minggu 2 ${nmb} ${year}`,   key:`${year}-W2-${mon}`},
-    {mgg:3, start:new Date(year,mon,15), end:new Date(year,mon,21,23,59,59), label:`Minggu 3 ${nmb} ${year}`,  key:`${year}-W3-${mon}`},
-    {mgg:4, start:new Date(year,mon,22), end:new Date(year,mon,lastDay,23,59,59), label:`Minggu 4 ${nmb} ${year}`, key:`${year}-W4-${mon}`},
-  ];
+  const lastDay=new Date(year,mon+1,0).getDate();
+  const firstSun=_firstSundayOfMonth(year,mon);
+  const ranges=[];
+  // Minggu 1: awal bulan s/d Sabtu setelah hari Minggu pertama
+  // Jika hari Minggu pertama > tgl 1, maka tgl 1 s/d hari Minggu pertama-1 masuk W1 juga
+  let wn=1;
+  let cur=new Date(firstSun);
+  // Tambah W1 mulai dari tgl 1 s/d Sabtu minggu pertama
+  const w1Start=new Date(year,mon,1);
+  const w1End=new Date(firstSun); w1End.setDate(firstSun.getDate()+6); w1End.setHours(23,59,59);
+  if(w1End.getMonth()>mon) w1End.setDate(lastDay);
+  ranges.push({mgg:1,start:w1Start,end:new Date(w1End),label:`Minggu 1 ${nmb} ${year}`,key:`${year}-W1-${mon}`});
+  // Minggu 2, 3, 4, dst: setiap 7 hari dari hari Minggu ke-2
+  cur.setDate(firstSun.getDate()+7);
+  wn=2;
+  while(cur.getMonth()===mon){
+    const wStart=new Date(cur);
+    const wEnd=new Date(cur); wEnd.setDate(cur.getDate()+6); wEnd.setHours(23,59,59);
+    if(wEnd.getMonth()>mon) wEnd.setDate(lastDay);
+    if(wStart.getDate()<=lastDay){
+      ranges.push({mgg:wn,start:wStart,end:new Date(wEnd),label:`Minggu ${wn} ${nmb} ${year}`,key:`${year}-W${wn}-${mon}`});
+    }
+    cur.setDate(cur.getDate()+7);
+    wn++;
+    if(wn>6) break; // safety
+  }
+  return ranges;
 }
 
 function _buildRekapJimpitan(){
   const el=document.getElementById('rjContent'); if(!el)return;
   const [y,m]=window._rjBulan.split('-').map(Number);
   const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-  const weeks=_getWeekRanges(y,m);
+  // Ambil semua weekKey yang ada datanya di bulan+tahun ini saja
+  const allWeekKeys=[...new Set(MEM.transaksi.filter(t=>{
+    if(!t.weekKey||t.weekKey==='KREDIT'||t.isCredit) return false;
+    const parts=t.weekKey.split('-');
+    return parts.length===3&&parseInt(parts[0])===y&&parseInt(parts[2])===m;
+  }).map(t=>t.weekKey))].sort();
+  // Juga ambil dari rekapEdit jika ada weekKey yang dicatat admin tapi belum ada transaksi
+  Object.keys(MEM.rekapEdit||{}).forEach(k=>{
+    const parts=k.split('-');
+    if(parts.length===3&&parseInt(parts[0])===y&&parseInt(parts[2])===m&&!allWeekKeys.includes(k))
+      allWeekKeys.push(k);
+  });
+  allWeekKeys.sort();
+  // Build weeks dari weekKey yang ada, pakai _getWeekRanges sebagai referensi range tanggal
+  const allRanges=_getWeekRanges(y,m);
+  const weeks=allWeekKeys.map(k=>{
+    const found=allRanges.find(r=>r.key===k);
+    if(found) return found;
+    // Fallback jika weekKey tidak ada di range (misal W5 di bulan 28 hari)
+    const wn=parseInt(k.split('-')[1].replace('W',''));
+    const tglMulai=(wn-1)*7+1;
+    const lastDay=new Date(y,m+1,0).getDate();
+    const tglAkhir=Math.min(wn*7,lastDay);
+    return {mgg:wn,start:new Date(y,m,tglMulai),end:new Date(y,m,tglAkhir,23,59,59),
+      label:`Minggu ${wn} ${mn[m]} ${y}`,key:k};
+  });
+  if(!weeks.length){
+    el.innerHTML='<div class="empty"><div class="ei">📭</div>Belum ada data transaksi di bulan ini</div>';
+    return;
+  }
   const isAdmin=CU.role==='admin';
   if(!MEM.rekapEdit) MEM.rekapEdit={};
   const now=new Date();
