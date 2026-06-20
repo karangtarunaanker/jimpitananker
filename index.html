@@ -600,12 +600,58 @@ function _migrasiRole(){
   if(changed) saveMEM();
 }
 
+// ── Penyimpanan transaksi per-id (BUKAN overwrite array) ──────────────────
+// Kenapa: kalau 2-4 HP scan/bayar BERSAMAAN, masing-masing menulis hanya entri
+// miliknya sendiri (by id), jadi tidak ada yang saling menimpa punya orang lain.
+// Wrapper di bawah ini menggantikan pola lama "MEM.transaksi.push(...)" /
+// "MEM.transaksi = MEM.transaksi.filter(...)" — perilaku MEM.transaksi di memori
+// (array biasa) SAMA PERSIS seperti sebelumnya, hanya pembukuan utk sync ke
+// Firebase yang ditambahkan, supaya semua fungsi kalkulasi yang sudah ada
+// (allocatePayment, buildRekap, pgTunggakan, dll) tidak perlu diubah.
+let _trxPendingAdd = new Set();
+let _trxPendingDel = new Set();
+
+function _trxPush(t){
+  MEM.transaksi.push(t);
+  _trxPendingAdd.add(t.id);
+  _trxPendingDel.delete(t.id);
+}
+function _trxMarkDirty(id){
+  _trxPendingAdd.add(id);
+  _trxPendingDel.delete(id);
+}
+function _trxRemoveById(id){
+  MEM.transaksi = MEM.transaksi.filter(x=>x.id!==id);
+  _trxPendingDel.add(id);
+  _trxPendingAdd.delete(id);
+}
+function _trxRemoveWhere(pred){
+  const removed = MEM.transaksi.filter(pred);
+  removed.forEach(t=>{ _trxPendingDel.add(t.id); _trxPendingAdd.delete(t.id); });
+  MEM.transaksi = MEM.transaksi.filter(t=>!pred(t));
+  return removed;
+}
+
 function saveTrx(){
-  if(isOnline){
-    _db.ref('jmpData/transaksi').set(MEM.transaksi)
-      .then(()=>{ const el=document.getElementById('cstat'); if(el) el.innerHTML='<span class="cdot on"></span>'; })
-      .catch(e=>console.warn('Firebase trx error',e));
-  }
+  if(!isOnline) return Promise.resolve();
+  if(_trxPendingAdd.size===0 && _trxPendingDel.size===0) return Promise.resolve();
+  const updates={};
+  _trxPendingAdd.forEach(id=>{
+    const t=MEM.transaksi.find(x=>x.id===id);
+    if(t) updates['jmpData/transaksiById/'+id]=t;
+  });
+  _trxPendingDel.forEach(id=>{ updates['jmpData/transaksiById/'+id]=null; });
+  const _addSnap=[..._trxPendingAdd], _delSnap=[..._trxPendingDel];
+  _trxPendingAdd=new Set(); _trxPendingDel=new Set();
+  return _db.ref().update(updates)
+    .then(()=>{ const el=document.getElementById('cstat'); if(el) el.innerHTML='<span class="cdot on"></span>'; })
+    .catch(e=>{
+      console.warn('Firebase trx error',e);
+      // Gagal kirim → kembalikan ke antrian pending supaya tidak hilang diam-diam
+      _addSnap.forEach(id=>_trxPendingAdd.add(id));
+      _delSnap.forEach(id=>_trxPendingDel.add(id));
+      throw e;
+    });
 }
 
 function saveQ()      { localStorage.setItem('jmp_q',       JSON.stringify(offQ)); }
@@ -668,24 +714,55 @@ function loadMEM(){
     }
     _setLoginReady(true);
 
-    // Listener realtime transaksi
-    _db.ref('jmpData/transaksi').on('value', snap2=>{
-      const trx = snap2.val();
-      if(Array.isArray(trx)){
-        const merged=[...trx];
+    // ── Migrasi otomatis: array 'jmpData/transaksi' (lama) → object 'jmpData/transaksiById' (baru) ──
+    // Tujuan: tiap transaksi disimpan sebagai entri terpisah (key = id) supaya beberapa HP yang
+    // scan/bayar BERSAMAAN tidak saling menimpa data satu sama lain (sebelumnya: 1 .set() menulis
+    // ulang SELURUH array, jadi tulisan terakhir menang & transaksi lain bisa hilang).
+    // Data array lama TIDAK dihapus, hanya dibaca sekali untuk migrasi (tetap sebagai cadangan).
+    _db.ref('jmpData/transaksiById').once('value').then(snapM=>{
+      const already = snapM.val();
+      if(already && typeof already==='object'){
+        // Sudah pernah migrasi, tidak perlu migrasi ulang
+        return Promise.resolve();
+      }
+      // Belum ada → migrasi dari array lama (MEM.transaksi yang sudah dimuat di atas)
+      if(Array.isArray(MEM.transaksi) && MEM.transaksi.length>0){
+        const byId={};
+        MEM.transaksi.forEach(t=>{ if(t && t.id) byId[t.id]=t; });
+        return _db.ref('jmpData/transaksiById').set(byId);
+      }
+      return Promise.resolve();
+    }).catch(e=>console.warn('Migrasi transaksiById gagal:',e));
+
+    // Listener realtime transaksi — baca dari node per-id (transaksiById), bukan array tunggal
+    let _lastTrxSig=null;
+    _db.ref('jmpData/transaksiById').on('value', snap2=>{
+      const obj = snap2.val();
+      if(obj && typeof obj==='object'){
+        const merged=Object.values(obj);
         offQ.forEach(t=>{ if(!merged.find(x=>x.id===t.id)) merged.push(t); });
         MEM.transaksi=merged;
-        if(CU && curPage){ try{ _reRender(); }catch(e){} }
+        // Skip render kalau data sebenarnya tidak berubah (mis. echo dari tulisan sendiri)
+        const sig=merged.length+'|'+(merged[merged.length-1]?.id||'');
+        if(sig!==_lastTrxSig){
+          _lastTrxSig=sig;
+          if(CU && curPage){ try{ _reRender(); }catch(e){} }
+        }
       }
     });
     // Listener realtime absen
+    let _lastAbsenSig=null;
     _db.ref('jmpData/absen').on('value', snap3=>{
       const ab = snap3.val();
       if(Array.isArray(ab)){
         const merged=[...ab];
         offAbsenQ.forEach(a=>{ if(!merged.find(x=>x.id===a.id)) merged.push(a); });
         MEM.absen=merged;
-        if(CU && curPage){ try{ _reRender(); }catch(e){} }
+        const sig=merged.length+'|'+(merged[merged.length-1]?.id||'');
+        if(sig!==_lastAbsenSig){
+          _lastAbsenSig=sig;
+          if(CU && curPage){ try{ _reRender(); }catch(e){} }
+        }
       }
     });
   }).catch(e=>{
@@ -725,13 +802,13 @@ function trySyncQ(){
     toSync.forEach(t=>{
       if(t._edit){
         const idx=MEM.transaksi.findIndex(x=>x.id===t.id);
-        if(idx!==-1){ MEM.transaksi[idx]={...t}; delete MEM.transaksi[idx]._edit; }
-        else { const tc={...t}; delete tc._edit; MEM.transaksi.push(tc); }
+        if(idx!==-1){ MEM.transaksi[idx]={...t}; delete MEM.transaksi[idx]._edit; _trxMarkDirty(t.id); }
+        else { const tc={...t}; delete tc._edit; _trxPush(tc); }
       } else {
-        if(!MEM.transaksi.find(x=>x.id===t.id)) MEM.transaksi.push(t);
+        if(!MEM.transaksi.find(x=>x.id===t.id)) _trxPush(t);
       }
     });
-    _db.ref('jmpData/transaksi').set(MEM.transaksi)
+    saveTrx()
       .then(()=>{
         offQ=offQ.filter(t=>!toSync.find(x=>x.id===t.id));
         saveQ(); updateSyncPill();
@@ -927,6 +1004,15 @@ function debtWeeks(wid){
   const p=paidWeeks(wid);
   return expectedWeeks(wid).filter(k=>!p.includes(k));
 }
+// Urutan bayar tunggakan: minggu yang PALING BARU telat dibayar duluan,
+// sisanya tetap diproses dari yang paling lama → makin baru (urutan asli).
+// Contoh: tunggakan [W1,W2,W3] (W3 paling baru) → urutan bayar: W3, W1, W2.
+function _debtPayOrder(debts){
+  if(debts.length<=1) return [...debts];
+  const newest=debts[debts.length-1];
+  const rest=debts.slice(0,-1);
+  return [newest, ...rest];
+}
 function getCredit(wid){ return MEM.transaksi.filter(t=>t.wargaId===wid&&t.isCredit).reduce((s,t)=>s+t.nominal,0); }
 
 function allocatePayment(wid, amount){
@@ -936,7 +1022,7 @@ function allocatePayment(wid, amount){
 
   // Hapus record kredit lama dari MEM.transaksi (akan dialokasikan ulang)
   if(existingCredit>0){
-    MEM.transaksi=MEM.transaksi.filter(t=>!(t.wargaId===wid&&t.isCredit));
+    _trxRemoveWhere(t=>t.wargaId===wid&&t.isCredit);
   }
 
   const debts=debtWeeks(wid);
@@ -952,8 +1038,8 @@ function allocatePayment(wid, amount){
     rem-=nom;
   }
 
-  // 2. Bayar tunggakan (dari terlama ke termuda)
-  for(const wk of debts){
+  // 2. Bayar tunggakan (paling baru telat dulu, sisanya terlama→termuda)
+  for(const wk of _debtPayOrder(debts)){
     if(rem<nom) break;
     if(allocs.find(a=>a.weekKey===wk)) continue;
     allocs.push({weekKey:wk,nominal:nom,isCredit:false,isDebt:true});
@@ -1478,10 +1564,10 @@ async function doConfirm(){
     isDebt:a.isDebt||false,isOffline:false
   }));
 
-  newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) MEM.transaksi.push(t); });
+  newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) _trxPush(t); });
 
   if(isOnline){
-    _db.ref('jmpData/transaksi').set(MEM.transaksi)
+    saveTrx()
       .then(()=>showToast(`✅ ${rpFmt(pendingAmt)} berhasil dicatat!`))
       .catch(()=>{ offQ.push(...newTrx); saveQ(); showToast('📤 Tersimpan offline'); });
   } else {
@@ -1833,7 +1919,7 @@ function doBayarTunggakan(){
     wargaId:tunggakanWarga.id,userId:CU.id,nominal:a.nominal,
     date:now,weekKey:a.weekKey,isCredit:a.isCredit||false,isDebt:a.isDebt||false,isOffline:!isOnline
   }));
-  newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) MEM.transaksi.push(t); });
+  newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) _trxPush(t); });
   if(isOnline){
     saveTrx();
     showToast('✅ Tunggakan berhasil dicatat!');
@@ -2248,7 +2334,7 @@ function saveEditTrx(){
   // Hapus transaksi lama yang berkaitan (transaksi dengan id ini)
   // Jika transaksi ini adalah bagian dari grup alokasi, hapus semua grup-nya (same date+wargaId+userId)
   // Tapi agar aman, hanya hapus transaksi dengan id ini
-  MEM.transaksi=MEM.transaksi.filter(x=>x.id!==editTrxId);
+  _trxRemoveById(editTrxId);
   offQ=offQ.filter(x=>x.id!==editTrxId);
 
   // Realokasi ulang dengan nominal dan tanggal baru (sama persis logika scan)
@@ -2262,7 +2348,7 @@ function saveEditTrx(){
     isCredit:a.isCredit||false, isDebt:a.isDebt||false, isOffline:!isOnline
   }));
 
-  newTrx.forEach(t2=>{ if(!MEM.transaksi.find(x=>x.id===t2.id)) MEM.transaksi.push(t2); });
+  newTrx.forEach(t2=>{ if(!MEM.transaksi.find(x=>x.id===t2.id)) _trxPush(t2); });
 
   if(isOnline){
     saveTrx();
@@ -2275,7 +2361,7 @@ function saveEditTrx(){
 }
 function delTrx(id){
   if(!confirm('Hapus transaksi ini?'))return;
-  MEM.transaksi=MEM.transaksi.filter(x=>x.id!==id);
+  _trxRemoveById(id);
   // Hapus juga dari offQ jika ada
   offQ=offQ.filter(x=>x.id!==id);
   saveQ(); updateSyncPill();
@@ -2446,7 +2532,7 @@ async function delWarga(id){
   if(!confirm('Hapus anggota ini dan semua riwayatnya?'))return;
   MEM.warga=MEM.warga.filter(w=>w.id!==id);
   MEM.users=MEM.users.filter(u=>u.wargaId!==id);
-  MEM.transaksi=MEM.transaksi.filter(t=>t.wargaId!==id);
+  _trxRemoveWhere(t=>t.wargaId===id);
   saveMEM(); showToast('🗑️ Anggota dihapus'); buildWarga();
 }
 
@@ -2519,14 +2605,47 @@ function doManualTrx(){
   const _ts4=Date.now();
   let newTrx=[];
   if(jenis==='debt'){
-    // Khusus bayar tunggakan: simpan langsung ke weekKey tanggal dipilih
+    // Bayar tunggakan: minggu yang dipilih di form dibayar dulu (sesuai pilihan
+    // eksplisit admin), lalu jika nominalnya lebih dari 1x, SISANYA dialokasikan
+    // otomatis ke tunggakan lain (urutan: paling baru telat dulu, sisanya
+    // terlama→termuda), dan kalau masih sisa lagi jadi kredit. Konsisten dengan
+    // mode Iuran Normal yang sudah lebih dulu pakai alokasi otomatis.
     const wkKey=weekKey(tglDate);
-    newTrx=[{
-      id:'T'+_ts4+'_0_'+Math.random().toString(36).substr(2,6),
-      wargaId:wid, userId:CU.id, nominal:nom,
+    const nom2=MEM.nominal;
+    let rem=nom;
+    let idx=0;
+    // 1. Minggu yang dipilih di form (boleh kurang dari 1x nominal, sesuai input asli)
+    const firstAmt = rem>=nom2 ? nom2 : rem;
+    newTrx.push({
+      id:'T'+_ts4+'_'+(idx++)+'_'+Math.random().toString(36).substr(2,6),
+      wargaId:wid, userId:CU.id, nominal:firstAmt,
       date:now, weekKey:wkKey,
       isCredit:false, isDebt:true, isOffline:!isOnline
-    }];
+    });
+    rem-=firstAmt;
+    // 2. Sisa (>= 1x nominal) dialokasikan ke tunggakan lain
+    if(rem>=nom2){
+      const otherDebts=debtWeeks(wid).filter(wk=>wk!==wkKey);
+      for(const wk of _debtPayOrder(otherDebts)){
+        if(rem<nom2) break;
+        newTrx.push({
+          id:'T'+_ts4+'_'+(idx++)+'_'+Math.random().toString(36).substr(2,6),
+          wargaId:wid, userId:CU.id, nominal:nom2,
+          date:now, weekKey:wk,
+          isCredit:false, isDebt:true, isOffline:!isOnline
+        });
+        rem-=nom2;
+      }
+    }
+    // 3. Sisa terakhir (tidak cukup 1x nominal / tidak ada tunggakan lagi) jadi kredit
+    if(rem>0){
+      newTrx.push({
+        id:'T'+_ts4+'_'+(idx++)+'_'+Math.random().toString(36).substr(2,6),
+        wargaId:wid, userId:CU.id, nominal:rem,
+        date:now, weekKey:'KREDIT',
+        isCredit:true, isDebt:false, isOffline:!isOnline
+      });
+    }
   } else {
     // Iuran normal: SELALU pakai alokasi otomatis (sama persis dengan scan)
     // - < 2000 → kredit (digabung scan berikutnya)
@@ -2541,7 +2660,7 @@ function doManualTrx(){
     }));
   }
 
-  newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) MEM.transaksi.push(t); });
+  newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) _trxPush(t); });
 
   if(isOnline){
     saveTrx();
@@ -2565,7 +2684,7 @@ function allocatePaymentForDate(wid, amount, refDate){
 
   // Hapus record kredit lama (akan dialokasikan ulang)
   if(existingCredit>0){
-    MEM.transaksi=MEM.transaksi.filter(t=>!(t.wargaId===wid&&t.isCredit));
+    _trxRemoveWhere(t=>t.wargaId===wid&&t.isCredit);
   }
 
   const debts=debtWeeks(wid);
@@ -2581,8 +2700,8 @@ function allocatePaymentForDate(wid, amount, refDate){
     rem-=nom;
   }
 
-  // 2. Bayar tunggakan (dari terlama ke termuda)
-  for(const wk of debts){
+  // 2. Bayar tunggakan (paling baru telat dulu, sisanya terlama→termuda)
+  for(const wk of _debtPayOrder(debts)){
     if(rem<nom) break;
     if(allocs.find(a=>a.weekKey===wk)) continue;
     allocs.push({weekKey:wk,nominal:nom,isCredit:false,isDebt:true});
@@ -3824,6 +3943,10 @@ function _dkHapus(id){
 function _reRender(){
   if(CU && curPage){
     try{
+      // Halaman 'scan' tidak menampilkan data transaksi secara live (hanya butuh
+      // MEM.transaksi ter-update untuk cek duplikat saat scan), jadi di-skip agar
+      // kamera TIDAK restart setiap kali ada transaksi baru dari user lain.
+      if(curPage==='scan') return;
       // Gunakan _keepState=true agar bulan yang sedang dilihat tidak direset
       // saat Firebase listener memicu render ulang karena ada transaksi baru
       if(curPage==='rekap') pgRekap(true);
@@ -4447,7 +4570,7 @@ function _hpEksekusi(){
   if(!ok2)return;
   // Hapus dari array (hanya transaksi non-credit di minggu terpilih)
   const idsHapus=new Set(trxDipilih.map(t=>t.id));
-  MEM.transaksi=MEM.transaksi.filter(t=>!idsHapus.has(t.id));
+  _trxRemoveWhere(t=>idsHapus.has(t.id));
   // Hapus rekapEdit untuk minggu yang dihapus
   _hpState.selWeeks.forEach(wk=>{
     if(MEM.rekapEdit&&MEM.rekapEdit[wk]) delete MEM.rekapEdit[wk];
@@ -4566,7 +4689,7 @@ function _wwdDoBayar(wid, wk, multi){
     weekKey:wk,                    // minggu yang DILUNASI (untuk cek tunggakan)
     isCredit:false,isDebt:true,isOffline:!isOnline
   };
-  MEM.transaksi.push(trx);
+  _trxPush(trx);
   if(isOnline){
     saveTrx();
   } else {
@@ -4586,8 +4709,7 @@ function _wwdHapusWeek(wid,weekKey){
   const w=MEM.warga.find(x=>x.id===wid);
   const trxList=MEM.transaksi.filter(t=>t.wargaId===wid&&t.weekKey===weekKey&&!t.isCredit);
   if(!confirm('Hapus '+trxList.length+' transaksi milik '+w.name+' di '+weekLabel(weekKey)+'?'))return;
-  const ids=new Set(trxList.map(t=>t.id));
-  MEM.transaksi=MEM.transaksi.filter(t=>!ids.has(t.id));
+  _trxRemoveWhere(t=>t.wargaId===wid&&t.weekKey===weekKey&&!t.isCredit);
   if(isOnline){ saveTrx(); }
   showToast('✅ '+ids.size+' transaksi dihapus');
   document.getElementById('_wwdModal').remove();
