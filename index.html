@@ -1076,8 +1076,14 @@ function getRTStats(rt){
   const paid=warga.filter(w=>MEM.transaksi.some(t=>t.wargaId===w.id&&t.weekKey===week&&!t.isCredit));
   const totalRp=MEM.transaksi.filter(t=>warga.some(w=>w.id===t.wargaId)&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
   const prevWeekRp=MEM.transaksi.filter(t=>warga.some(w=>w.id===t.wargaId)&&t.weekKey===pw&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
-  const debtCount=warga.filter(w=>debtWeeks(w.id).length>0).length;
-  const debtRp=warga.reduce((s,w)=>s+debtWeeks(w.id).length*MEM.nominal,0);
+  // debtWeeks(w.id) dihitung 1x per warga (sebelumnya dipanggil 2x terpisah utk
+  // debtCount & debtRp — hasil akhirnya SAMA PERSIS, cuma tidak dihitung dobel)
+  let debtCount=0, debtRp=0;
+  warga.forEach(w=>{
+    const dwLen=debtWeeks(w.id).length;
+    if(dwLen>0) debtCount++;
+    debtRp+=dwLen*MEM.nominal;
+  });
   return{total:warga.length,paid:paid.length,unpaid:warga.length-paid.length,totalRp,prevWeekRp,debtCount,debtRp};
 }
 
