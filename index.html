@@ -509,11 +509,11 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
       <div id="mt_nama_terpilih" style="font-size:12px;color:var(--g);margin-top:4px;font-weight:600"></div>
     </div>
     <div class="fg" style="margin-top:10px"><label>Tanggal Transaksi</label>
-      <input id="mt_date" class="fi" type="date"></div>
+      <input id="mt_date" class="fi" type="date" oninput="previewManualAlloc()"></div>
     <div class="fg" style="margin-top:10px"><label>Nominal</label>
-      <input id="mt_nom" class="fi" type="number" placeholder="cth: 2000"></div>
+      <input id="mt_nom" class="fi" type="number" placeholder="cth: 2000" oninput="previewManualAlloc()"></div>
     <div class="fg" style="margin-top:10px"><label>Jenis</label>
-      <select id="mt_jenis" class="fi">
+      <select id="mt_jenis" class="fi" onchange="previewManualAlloc()">
         <option value="normal">Iuran Mingguan</option>
         <option value="debt">Bayar Tunggakan</option>
       </select></div>
@@ -560,6 +560,24 @@ let MEM = {users:[],warga:[],transaksi:[],nominal:2000,seeded:false,kasUmum:[],k
 let offQ      = JSON.parse(localStorage.getItem('jmp_q')||'[]');
 let offAbsenQ = JSON.parse(localStorage.getItem('jmp_absen_q')||'[]');
 let isOnline  = navigator.onLine;
+
+// Cache getRTStats — dihitung ulang hanya kalau jumlah transaksi/warga berubah
+let _rtStatsCache={};
+let _rtStatsSig='';
+function _getRTStatsCached(rt){
+  const sig=MEM.transaksi.length+'|'+MEM.warga.length+'|'+MEM.nominal;
+  if(sig!==_rtStatsSig){ _rtStatsCache={}; _rtStatsSig=sig; }
+  if(!_rtStatsCache[rt]) _rtStatsCache[rt]=getRTStats(rt);
+  return _rtStatsCache[rt];
+}
+
+// Debounce — tunda eksekusi fungsi sampai pengguna berhenti mengetik (ms)
+// Tidak mengubah logika fungsi yang dipanggil, hanya mengatur KAPAN dipanggil
+const _dbt={};
+function _debounce(key, fn, ms=300){
+  clearTimeout(_dbt[key]);
+  _dbt[key]=setTimeout(fn, ms);
+}
 
 function _normMEM(){
   if(!Array.isArray(MEM.warga))       MEM.warga=[];
@@ -1063,6 +1081,49 @@ function allocatePayment(wid, amount){
   return allocs;
 }
 
+// Alokasi KHUSUS menu Bayar Tunggakan — berbeda dari allocatePayment (scan):
+// - TIDAK masuk minggu berjalan (orang datang khusus bayar utang lama)
+// - Urutan: tunggakan paling baru dulu → terlama → tengah (via _debtPayOrder)
+// - Sisa → minggu depan (pre-bayar) → kredit
+function allocateTunggakan(wid, amount){
+  const existingCredit=getCredit(wid);
+  const totalAmt=amount+existingCredit;
+
+  if(existingCredit>0){
+    _trxRemoveWhere(t=>t.wargaId===wid&&t.isCredit);
+  }
+
+  const debts=debtWeeks(wid);
+  const paid=paidWeeks(wid);
+  const nom=MEM.nominal;
+  const allocs=[];
+  let rem=totalAmt;
+
+  // 1. Bayar tunggakan (paling baru telat dulu, sisanya terlama→termuda)
+  //    TIDAK ada step minggu berjalan — ini bedanya dengan scan (allocatePayment)
+  for(const wk of _debtPayOrder(debts)){
+    if(rem<nom) break;
+    allocs.push({weekKey:wk,nominal:nom,isCredit:false,isDebt:true});
+    rem-=nom;
+  }
+
+  // 2. Sisa → minggu depan (pre-bayar)
+  let fo=1;
+  while(rem>=nom && fo<53){
+    const fd=new Date(); fd.setDate(fd.getDate()+(fo*7));
+    const fk=weekKey(fd);
+    if(!paid.includes(fk)&&!allocs.find(a=>a.weekKey===fk)){
+      allocs.push({weekKey:fk,nominal:nom,isCredit:false,isDebt:false});
+      rem-=nom;
+    }
+    fo++;
+  }
+
+  // 3. Sisa terakhir → kredit
+  if(rem>0) allocs.push({weekKey:'KREDIT',nominal:rem,isCredit:true,isDebt:false});
+  return allocs;
+}
+
 function prevWeekKey(){
   const now=new Date();
   const prev=new Date(now);
@@ -1197,8 +1258,8 @@ function pgHome(){
   if(!Array.isArray(MEM.kasUmum)) MEM.kasUmum=[];
   if(!Array.isArray(MEM.kasJimpitan)) MEM.kasJimpitan=[];
   if(!Array.isArray(MEM.absen)) MEM.absen=[];
-  const all=getRTStats('all');
-  const s1=getRTStats('RT 01'), s2=getRTStats('RT 02');
+  const all=_getRTStatsCached('all');
+  const s1=_getRTStatsCached('RT 01'), s2=_getRTStatsCached('RT 02');
   const today=new Date().toLocaleDateString('id-ID',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const isStaff=CU.role==='admin'||CU.role==='divisi'||CU.role==='petugas';
   const isPanitia=CU.role==='panitia';
@@ -1497,6 +1558,7 @@ function showWarnDuplikat(w, scanList){
   document.body.appendChild(overlay);
 }
 function srchScan(){
+  _debounce('srchScan', ()=>{
   const q=(document.getElementById('ss')||{}).value?.toLowerCase()||'';
   const el=document.getElementById('sr'); if(!el)return;
   if(!q){el.innerHTML='';return;}
@@ -1508,6 +1570,7 @@ function srchScan(){
         <div class="ws">${w.rt}${debtWeeks(w.id).length>0?' · ⚠️ '+debtWeeks(w.id).length+' tunggak':''}</div></div>
       <span style="color:var(--g);font-size:18px">→</span>
     </div>`).join('');
+  }, 250);
 }
 
 // confirm
@@ -1819,6 +1882,7 @@ function filterTunggakan(f){
   buildTunggakan(f);
 }
 function buildTunggakan(f){
+  _debounce('buildTunggakan', ()=>{
   const q=(document.getElementById('tSearch')||{}).value?.toLowerCase()||'';
   const warga=MEM.warga.filter(w=>(f==='all'||w.rt===f)&&(!q||w.name.toLowerCase().includes(q)));
   const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:debtWeeks(w.id).length*MEM.nominal}))
@@ -1847,6 +1911,7 @@ function buildTunggakan(f){
       </div>
       ${canEdit?`<button class="bsm bsm-g" onclick="openBayarTunggakan('${w.id}')">Bayar</button>`:''}
     </div>`).join('');
+  }, 250);
 }
 
 function diagTunggakan(){
@@ -1908,7 +1973,7 @@ function previewTunggakanAlloc(){
   const nom=parseInt(document.getElementById('bt_nom').value)||0;
   const el=document.getElementById('bt_preview');
   if(nom<=0){el.textContent='Masukkan nominal';return;}
-  const allocs=allocatePayment(tunggakanWarga.id,nom);
+  const allocs=allocateTunggakan(tunggakanWarga.id,nom);
   el.innerHTML='<b style="color:var(--g)">Alokasi:</b><br>'+allocs.map(a=>
     a.isCredit?`💰 Kredit: ${rpFmt(a.nominal)}`:`${a.isDebt?'📌':'✅'} ${weekLabel(a.weekKey)}: ${rpFmt(a.nominal)}`
   ).join('<br>');
@@ -1917,7 +1982,7 @@ function doBayarTunggakan(){
   if(!tunggakanWarga)return;
   const nom=parseInt(document.getElementById('bt_nom').value)||0;
   if(nom<=0){showToast('❌ Masukkan nominal');return;}
-  const allocs=allocatePayment(tunggakanWarga.id,nom);
+  const allocs=allocateTunggakan(tunggakanWarga.id,nom);
   const now=new Date().toISOString();
   const _ts2=Date.now();
   const newTrx=allocs.map((a,i)=>({
@@ -2100,7 +2165,7 @@ function _doPrintTunggakan(){
         <div class="kop-tgl">${tglCetak}</div>
       </div>
       <div class="isi">
-        <p class="intro">Dengan adanya surat ini, kami pengurus ingin memberitahukan bahwa:</p>
+        <p class="intro">Dengan adanya surat ini, kami pengurus Jimpitan ingin memberitahukan bahwa:</p>
         <table class="dtbl">
           <tr><td class="lbl">Nama</td><td class="sep">:</td><td class="val"><b>${w.name}</b></td></tr>
           <tr><td class="lbl">Jumlah Tunggakan</td><td class="sep">:</td><td class="val">${dw.length} minggu</td></tr>
@@ -2108,7 +2173,12 @@ function _doPrintTunggakan(){
           ${denda>0?`<tr><td class="lbl">Denda</td><td class="sep">:</td><td class="val" style="color:#c0392b">Rp ${denda.toLocaleString('id-ID')}</td></tr>`:''}
           <tr class="total-row"><td class="lbl"><b>Total</b></td><td class="sep">:</td><td class="val"><b>Rp ${total.toLocaleString('id-ID')}</b> <span class="terbilang">( ${terbilangRupiah(total)} )</span></td></tr>
         </table>
-        <p class="penutup">Mohon untuk segera menghubungi divisi jimpitan untuk melakukan pelunasan <b>sebelum tanggal ${tglBatas}</b>.</p>
+        <p class="penutup">Mohon untuk segera menghubungi divisi jimpitan (mas Shona ),untuk melakukan pelunasan <b>sebelum tanggal ${tglBatas}</b>.</p>
+        <p class="bawa-surat"><i><b>Harap bawa surat ini ketika membayar dan simpan sebagai bukti jika sudah membayar.</b></i></p>
+        <div class="stempel-box">
+          <div class="stempel-label">Status Pembayaran</div>
+          <div class="stempel-area"></div>
+        </div>
       </div>
       <div class="ttd">
         <div class="ttd-label">Divisi Jimpitan</div>
@@ -2158,6 +2228,10 @@ function _doPrintTunggakan(){
     .total-row td{padding-top:7px;border-top:1.5px dashed #999;font-size:13px}
     .terbilang{font-size:11px;color:#555;font-style:italic;padding-left:4px}
     .penutup{font-size:11px;color:#333;margin-top:8px;line-height:1.6;border-top:1px solid #eee;padding-top:6px}
+    .bawa-surat{font-size:11px;color:#1a3a5c;margin-top:5px;line-height:1.5}
+    .stempel-box{margin-top:6px;display:flex;align-items:center;gap:10px}
+    .stempel-label{font-size:10px;color:#555;font-weight:700;white-space:nowrap}
+    .stempel-area{flex:1;height:36px;border:1.5px dashed #aaa;border-radius:6px;background:#fafafa}
     .ttd{margin-top:8px;text-align:right}
     .ttd-label{font-size:13px;font-weight:700;color:#1a3a5c}
     .ttd-space{height:28px}
@@ -2227,7 +2301,7 @@ function rsResetFilter(){
   buildRiwayatScan();
 }
 function buildRiwayatScan(){
-  // Gunakan nilai dari DOM jika tersedia, fallback ke variabel global
+  _debounce('buildRiwayatScan', ()=>{
   const domDari=document.getElementById('rf_dari');
   const domSampai=document.getElementById('rf_sampai');
   const domSearch=document.getElementById('rsearch');
@@ -2239,22 +2313,17 @@ function buildRiwayatScan(){
   const canEdit=CU.role==='admin'||CU.role==='divisi';
   const isStaff=CU.role==='admin'||CU.role==='divisi';
   const todayStr=new Date().toDateString();
-
-  // Ambil filter tanggal dari variabel global (persisten meski HTML di-render ulang)
   const dariVal=_rsDari||'';
   const sampaiVal=_rsSampai||'';
   const dariDate=dariVal?new Date(dariVal+'T00:00:00'):null;
   const sampaiDate=sampaiVal?new Date(sampaiVal+'T23:59:59'):null;
-
   const trx=[...MEM.transaksi]
     .filter(t=>{
       const w=MEM.warga.find(x=>x.id===t.wargaId);
       if(!isStaff){
         return t.userId===CU.id && new Date(t.date).toDateString()===todayStr;
       }
-      // Filter nama
       if(q && !(w&&w.name.toLowerCase().includes(q))) return false;
-      // Filter tanggal input/scan
       const tDate=new Date(t.date);
       if(dariDate && tDate<dariDate) return false;
       if(sampaiDate && tDate>sampaiDate) return false;
@@ -2262,7 +2331,6 @@ function buildRiwayatScan(){
     })
     .sort((a,b)=>new Date(b.date)-new Date(a.date))
     .slice(0,200);
-
   el.innerHTML=trx.length===0?'<div class="empty"><div class="ei">📭</div>'+(isStaff?'Belum ada data':'Belum ada scan hari ini')+'</div>':
     trx.map(t=>{
       const w=MEM.warga.find(x=>x.id===t.wargaId);
@@ -2286,6 +2354,7 @@ function buildRiwayatScan(){
         </div>
       </div>`;
     }).join('');
+  }, 250);
 }
 // edit/hapus transaksi
 let editTrxId=null, editTrxWid=null;
@@ -2400,6 +2469,7 @@ function pgWarga(){
   buildWarga();
 }
 function buildWarga(){
+  _debounce('buildWarga', ()=>{
   const q=(document.getElementById('ws')||{}).value?.toLowerCase()||'';
   const tw=thisWeek();
   const list=MEM.warga.filter(w=>w.rt===wfRT&&(!q||w.name.toLowerCase().includes(q)));
@@ -2411,7 +2481,6 @@ function buildWarga(){
       const dw=debtWeeks(w.id).length;
       const tot=MEM.transaksi.filter(t=>t.wargaId===w.id&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
       const exStat=isExempt(w);
-      // Icon tombol: 🚫 jika exempt permanen, ⏳ jika sementara, 📅 jika ada startDate, ⚙️ default
       const hasSd=!exStat&&w.startDate;
       const exBtnIcon=exStat==='permanent'?'🚫':exStat==='temp'?'⏳':hasSd?'📅':'⚙️';
       const exBtnBg=exStat?'var(--rl)':hasSd?'#e8f5e9':'#f5f5f5';
@@ -2435,6 +2504,7 @@ function buildWarga(){
         </div>
       </div>`;
     }).join('');
+  }, 250);
 }
 // ── PENGECUALIAN TUNGGAKAN ────────────────────────────────────
 // Return: 'permanent' | 'temp' | null
@@ -2585,6 +2655,24 @@ function pilihMtWarga(id, nama, rt){
   document.getElementById('mt_search').value=nama;
   document.getElementById('mt_nama_terpilih').textContent='✓ '+nama+' ('+rt+')';
   document.getElementById('mt_drop').style.display='none';
+  previewManualAlloc();
+}
+
+function previewManualAlloc(){
+  const wid=document.getElementById('mt_warga').value;
+  const nom=parseInt(document.getElementById('mt_nom').value)||0;
+  const tglVal=document.getElementById('mt_date').value;
+  const jenis=document.getElementById('mt_jenis').value;
+  const el=document.getElementById('mt_preview');
+  if(!wid||nom<=0||!tglVal){el.textContent='';return;}
+  const tglDate=new Date(tglVal+'T12:00:00');
+  const allocs=jenis==='debt'
+    ? allocateTunggakan(wid, nom)
+    : allocatePaymentForDate(wid, nom, tglDate);
+  el.innerHTML='<b style="color:var(--g)">Alokasi:</b><br>'+allocs.map(a=>
+    a.isCredit?`💰 Kredit: ${rpFmt(a.nominal)}`
+    :`${a.isDebt?'📌':'✅'} ${weekLabel(a.weekKey)}: ${rpFmt(a.nominal)}`
+  ).join('<br>');
 }
 
 function doManualTrx(){
