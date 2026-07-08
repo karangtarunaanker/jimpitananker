@@ -1222,11 +1222,11 @@ function go(page, _fromPop){
   if(!_fromPop){
     history.pushState({page}, '', '#'+page);
   }
-  ({home:pgHome,scan:pgScan,rekap:pgRekap,tunggakan:pgTunggakan,warga:pgWarga,admin:pgAdmin,riwayat:pgRiwayat,riwayatScan:pgRiwayatScan,kas:pgKas,kasUmum:pgKasUmum,kasJimpitan:pgKasJimpitan,rekapJimpitan:pgRekapJimpitan,absen:pgAbsen,absenIsi:pgAbsenIsi,rekapAbsen:pgRekapAbsen,kelolaAkun:pgKelolaAkun,daftarKelompok:pgDaftarKelompok,kegiatan:pgKegiatan,kegiatanDetail:pgKegiatanDetail})[page]?.();
+  ({home:pgHome,scan:pgScan,rekap:pgRekap,tunggakan:pgTunggakan,riwayatTunggakan:pgRiwayatTunggakan,warga:pgWarga,admin:pgAdmin,riwayat:pgRiwayat,riwayatScan:pgRiwayatScan,kas:pgKas,kasUmum:pgKasUmum,kasJimpitan:pgKasJimpitan,rekapJimpitan:pgRekapJimpitan,absen:pgAbsen,absenIsi:pgAbsenIsi,rekapAbsen:pgRekapAbsen,kelolaAkun:pgKelolaAkun,daftarKelompok:pgDaftarKelompok,kegiatan:pgKegiatan,kegiatanDetail:pgKegiatanDetail})[page]?.();
 }
 
 // Map halaman ke tujuan back
-const _PAGE_BACK={scan:'home',rekap:'home',tunggakan:'home',warga:'home',riwayatScan:'home',riwayat:'home',admin:'home',kas:'home',kasUmum:'kas',kasJimpitan:'kas',rekapJimpitan:'kas',absen:'home',absenIsi:'absen',rekapAbsen:'absen',kelolaAkun:'home',daftarKelompok:'absen',kegiatan:'home',kegiatanDetail:'kegiatan'};
+const _PAGE_BACK={scan:'home',rekap:'home',tunggakan:'home',riwayatTunggakan:'tunggakan',warga:'home',riwayatScan:'home',riwayat:'home',admin:'home',kas:'home',kasUmum:'kas',kasJimpitan:'kas',rekapJimpitan:'kas',absen:'home',absenIsi:'absen',rekapAbsen:'absen',kelolaAkun:'home',daftarKelompok:'absen',kegiatan:'home',kegiatanDetail:'kegiatan'};
 
 // Tangkap tombol back HP / browser
 window.addEventListener('popstate', e=>{
@@ -1867,7 +1867,7 @@ function pgTunggakan(){
       <button class="fp" id="tRT1" onclick="filterTunggakan('RT 01')">RT 01</button>
       <button class="fp" id="tRT2" onclick="filterTunggakan('RT 02')">RT 02</button>
       ${(CU.role==='admin'||CU.role==='divisi')?`
-      <button class="fp" style="background:var(--red);border-color:var(--red);color:#fff" onclick="exportTunggakan()">📥 Ekspor</button>
+      <button class="fp" style="background:var(--g);border-color:var(--g);color:#fff" onclick="go('riwayatTunggakan')">📜 Riwayat Bayar</button>
       <button class="fp" style="background:#1a3a5c;border-color:#1a3a5c;color:#fff" onclick="openPrintTunggakan()">🖨️ Print</button>`:''}
     </div>
     <div class="sg" id="tStats"></div>
@@ -1898,8 +1898,7 @@ function buildTunggakan(f){
         <div style="font-size:10px;color:#2e7d52;font-weight:700;text-transform:uppercase;letter-spacing:.3px;margin-bottom:2px">Total Tunggakan</div>
         <div style="font-size:15px;font-weight:800;color:#1a6b3c;font-family:'JetBrains Mono',monospace;white-space:nowrap">${rpFmt(totalDebt)}</div>
       </div>
-    </div>
-    ${(CU.role==='admin'||CU.role==='divisi')?`<div style="text-align:right;margin-bottom:4px"><button onclick="diagTunggakan()" style="font-size:11px;background:#f0f0f0;border:none;border-radius:6px;padding:3px 10px;cursor:pointer;color:#555">🔍 Diagnosis</button></div>`:''}`;
+    </div>`;
   const el=document.getElementById('tList'); if(!el)return;
   const canEdit=CU.role==='admin'||CU.role==='divisi';
   el.innerHTML=debtors.length===0?'<div class="empty"><div class="ei">🎉</div>Semua anggota lunas!</div>':
@@ -1988,7 +1987,8 @@ function doBayarTunggakan(){
   const newTrx=allocs.map((a,i)=>({
     id:'T'+_ts2+'_'+i+'_'+Math.random().toString(36).substr(2,6),
     wargaId:tunggakanWarga.id,userId:CU.id,nominal:a.nominal,
-    date:now,weekKey:a.weekKey,isCredit:a.isCredit||false,isDebt:a.isDebt||false,isOffline:!isOnline
+    date:now,weekKey:a.weekKey,isCredit:a.isCredit||false,isDebt:a.isDebt||false,isOffline:!isOnline,
+    source:'tunggakan'
   }));
   newTrx.forEach(t=>{ if(!MEM.transaksi.find(x=>x.id===t.id)) _trxPush(t); });
   if(isOnline){
@@ -2001,6 +2001,55 @@ function doBayarTunggakan(){
   }
   closeModal('moBayarTunggakan');
   buildTunggakan(tFilter);
+}
+
+// ===== Riwayat Bayar Tunggakan (khusus dari tombol Bayar di menu Tunggakan) =====
+let _rtSearch='';
+function pgRiwayatTunggakan(){
+  if(CU.role!=='admin'&&CU.role!=='divisi'){go('tunggakan');return;}
+  curPage='riwayatTunggakan';
+  document.getElementById('MC').innerHTML=`
+    <button class="back-btn" onclick="go('tunggakan')">← Rekap Tunggakan</button>
+    <div class="ct">📜 Riwayat Bayar Tunggakan</div>
+    <input class="si" id="rtSearch" placeholder="🔍 Cari nama anggota..." value="${_rtSearch}" oninput="_rtSearch=this.value;buildRiwayatTunggakan()" style="margin-bottom:8px">
+    <div style="font-size:12px;color:var(--tl);margin-bottom:10px">Menampilkan pembayaran tunggakan lewat tombol Bayar di menu ini saja.</div>
+    <div class="cd"><div id="rtList"></div></div>`;
+  buildRiwayatTunggakan();
+}
+function buildRiwayatTunggakan(){
+  _debounce('buildRiwayatTunggakan', ()=>{
+  const q=_rtSearch.toLowerCase().trim();
+  const el=document.getElementById('rtList'); if(!el)return;
+  // Ambil hanya transaksi yang berasal dari tombol Bayar Tunggakan (source==='tunggakan')
+  const trx=MEM.transaksi.filter(t=>t.source==='tunggakan');
+  // Kelompokkan per kejadian bayar (wargaId + waktu persis yang sama = satu kali klik Bayar)
+  const groups={};
+  trx.forEach(t=>{
+    const key=t.wargaId+'|'+t.date;
+    if(!groups[key]) groups[key]={wargaId:t.wargaId,date:t.date,total:0};
+    groups[key].total+=t.nominal;
+  });
+  let rows=Object.values(groups).map(g=>{
+    const w=MEM.warga.find(x=>x.id===g.wargaId);
+    return {...g,nama:w?w.name:g.wargaId,rt:w?w.rt:'',sisa:debtWeeks(g.wargaId).length*MEM.nominal};
+  });
+  if(q) rows=rows.filter(r=>r.nama.toLowerCase().includes(q));
+  rows.sort((a,b)=>new Date(b.date)-new Date(a.date));
+  el.innerHTML=rows.length===0?'<div class="empty"><div class="ei">📭</div>Belum ada riwayat pembayaran tunggakan</div>':
+    rows.map(r=>{
+      const d=new Date(r.date);
+      const tgl=d.toLocaleDateString('id-ID')+' '+d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+      return `<div class="ri">
+        <div class="rdot"></div>
+        <div style="flex:1">
+          <div class="rn">${r.nama} <span style="font-size:10px;color:var(--tl)">${r.rt}</span></div>
+          <div class="rm">${tgl}</div>
+          <div class="rm" style="margin-top:1px">${r.sisa>0?`Sisa tunggakan: <b style="color:var(--red)">${rpFmt(r.sisa)}</b>`:'<b style="color:var(--g)">Lunas</b>'}</div>
+        </div>
+        <span class="ra">${rpFmt(r.total)}</span>
+      </div>`;
+    }).join('');
+  }, 250);
 }
 function exportTunggakan(){
   const warga=MEM.warga.filter(w=>tFilter==='all'||w.rt===tFilter);
