@@ -3356,6 +3356,19 @@ function _buildRekapJimpitan(){
     if(parts.length===3&&parseInt(parts[0])===y&&parseInt(parts[2])===m&&!allWeekKeys.includes(k))
       allWeekKeys.push(k);
   });
+  // PERBAIKAN: Karena Pemasukan/Tunggakan/Kredit sekarang dihitung dari TANGGAL ASLI
+  // transaksi (bukan label weekKey), pastikan kartu minggu tetap muncul untuk minggu
+  // yang benar-benar menerima uang di tanggal itu, walau transaksinya berlabel weekKey
+  // minggu lain (misal pra-bayar minggu depan). Tanpa ini, minggu yang cuma berisi
+  // pra-bayar untuk minggu lain bisa jadi tidak punya kartu sama sekali.
+  MEM.transaksi.forEach(t=>{
+    if(!t.date) return;
+    const d=new Date(t.date);
+    const realWk=weekKey(d);
+    const parts=realWk.split('-');
+    if(parts.length===3&&parseInt(parts[0])===y&&parseInt(parts[2])===m&&!allWeekKeys.includes(realWk))
+      allWeekKeys.push(realWk);
+  });
   allWeekKeys.sort();
   // Build weeks dari weekKey yang ada, pakai _getWeekRanges sebagai referensi range tanggal
   const allRanges=_getWeekRanges(y,m);
@@ -3382,8 +3395,16 @@ function _buildRekapJimpitan(){
   let html='';
 
   weeks.forEach(wk=>{
-    // Iuran normal = weekKey cocok, bukan kredit, bukan tunggakan
-    const iuranTrx=MEM.transaksi.filter(t=>t.weekKey===wk.key&&!t.isCredit&&!t.isDebt);
+    // PERBAIKAN: Iuran normal difilter berdasarkan TANGGAL TRANSAKSI SEBENARNYA (t.date),
+    // bukan weekKey. weekKey bisa berisi label minggu depan (pre-bayar), sehingga rekap
+    // sebelumnya menampilkan uang di minggu yang belum benar-benar terjadi. Sekarang
+    // rekap menampilkan uang sesuai minggu SAAT UANG ITU BENERAN DITERIMA/DICATAT —
+    // konsisten dengan cara Bayar Tunggakan dan Kredit Masuk di atas.
+    const iuranTrx=MEM.transaksi.filter(t=>{
+      if(t.isCredit||t.isDebt) return false;
+      const d=new Date(t.date);
+      return d>=wk.start&&d<=wk.end;
+    });
     const iuranJml=iuranTrx.length;
     const iuranRp=iuranTrx.reduce((s,t)=>s+t.nominal,0);
 
