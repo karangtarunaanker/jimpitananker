@@ -314,11 +314,11 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
       <b>☁️ PERHATIAN!!!</b> PASTIKAN TERHUBUNG JARINGAN SAAT LOGIN.
     </div>
     <div class="fg"><label>Username</label>
-      <input id="lu" class="fi" placeholder="Username" autocomplete="username" onkeydown="if(event.key==='Enter')login()">
+      <input id="lu" class="fi" placeholder="Username" autocomplete="off" name="lu-field" onkeydown="if(event.key==='Enter')login()">
     </div>
     <div class="fg"><label>Password</label>
       <div style="position:relative">
-        <input id="lp" class="fi" type="password" placeholder="Password" autocomplete="current-password" onkeydown="if(event.key==='Enter')login()" style="padding-right:44px;margin:0">
+        <input id="lp" class="fi" type="password" placeholder="Password" autocomplete="new-password" name="lp-field" onkeydown="if(event.key==='Enter')login()" style="padding-right:44px;margin:0">
         <span onclick="var i=document.getElementById('lp');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'👁️':'🙈'"
           style="position:absolute;right:12px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:17px;line-height:1;user-select:none">👁️</span>
       </div>
@@ -3405,8 +3405,13 @@ function _buildRekapJimpitan(){
       tunggakanPerWarga[nama]+=t.nominal;
     });
 
-    // Kredit masuk — filter berdasarkan weekKey (kredit tidak punya weekKey khusus)
-    const kreditTrx=MEM.transaksi.filter(t=>t.weekKey===wk.key&&t.isCredit);
+    // Kredit masuk — kredit tidak punya weekKey per-minggu (selalu 'KREDIT'),
+    // jadi difilter berdasarkan TANGGAL KEJADIANNYA (t.date), sama seperti Bayar Tunggakan
+    const kreditTrx=MEM.transaksi.filter(t=>{
+      if(!t.isCredit) return false;
+      const d=new Date(t.date);
+      return d>=wk.start&&d<=wk.end;
+    });
     const kreditRp=kreditTrx.reduce((s,t)=>s+t.nominal,0);
 
     // Edit override dari admin
