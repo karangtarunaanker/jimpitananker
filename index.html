@@ -1472,19 +1472,24 @@ function startCam(){
           if(btn) btn.style.display='block';
         }
       }
-      if('BarcodeDetector' in window){
-        const bd=new BarcodeDetector({formats:['qr_code']});
-        const det=async()=>{
-          if(!vStream||!document.getElementById('sv'))return;
-          try{const cs=await bd.detect(v);if(cs.length){stopCam();procScan(cs[0].rawValue);return;}}catch(e){}
-          scanInt=setTimeout(det,300);
-        }; det();
-      } else {
-        const loadJSQR=cb=>{
+      // ── Deteksi QR: coba BarcodeDetector dulu (lebih cepat), fallback ke jsQR ──
+      // Perbaikan (lihat riwayat diskusi): sebagian browser Android/iOS melaporkan
+      // 'BarcodeDetector' ada di window, tapi sebenarnya TIDAK mendukung format
+      // qr_code — sebelumnya ini membuat pembuatan BarcodeDetector atau proses
+      // detect() error tanpa tertangkap, sehingga loop scan berhenti total tanpa
+      // pesan apapun (kamera tetap terlihat menyala, tapi tidak pernah merespons).
+      // Sekarang: setiap kegagalan otomatis dan otomatis dialihkan ke jsQR,
+      // dan proses load jsQR dari CDN diberi batas waktu + pesan error yang
+      // terlihat oleh pengguna (dengan tombol coba lagi) alih-alih diam selamanya.
+      const runJsQRLoop=()=>{
+        const loadJSQR=(cb,onFail)=>{
           if(window.jsQR){cb();return;}
           const s2=document.createElement('script');
           s2.src='https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js';
-          s2.onload=cb; document.head.appendChild(s2);
+          const to=setTimeout(()=>{ s2.onload=null; s2.onerror=null; onFail&&onFail(); },8000);
+          s2.onload=()=>{ clearTimeout(to); cb(); };
+          s2.onerror=()=>{ clearTimeout(to); onFail&&onFail(); };
+          document.head.appendChild(s2);
         };
         loadJSQR(()=>{
           const cv=document.getElementById('hc'),ctx=cv.getContext('2d',{willReadFrequently:true});
@@ -1498,8 +1503,36 @@ function startCam(){
             }
             scanInt=setTimeout(scan,350);
           }; scan();
+        }, ()=>{
+          const el=document.getElementById('scanSt');
+          if(el) el.innerHTML='❌ Gagal memuat pustaka scan (cek koneksi internet). '
+            +'<button onclick="pgScan()" style="margin-left:6px;padding:4px 10px;border-radius:6px;border:none;background:var(--g);color:#fff;font-size:11px;cursor:pointer">Coba Lagi</button>';
         });
+      };
+
+      let useBarcodeDetector=false;
+      if('BarcodeDetector' in window){
+        try{
+          const bd=new BarcodeDetector({formats:['qr_code']});
+          useBarcodeDetector=true;
+          const det=async()=>{
+            if(!vStream||!document.getElementById('sv'))return;
+            try{
+              const cs=await bd.detect(v);
+              if(cs.length){stopCam();procScan(cs[0].rawValue);return;}
+            }catch(e){
+              // detect() error (bukan sekadar tidak ketemu QR) → browser ini
+              // ternyata tidak benar2 dukung BarcodeDetector, pindah ke jsQR
+              runJsQRLoop();
+              return;
+            }
+            scanInt=setTimeout(det,300);
+          }; det();
+        }catch(e){
+          useBarcodeDetector=false; // konstruksi BarcodeDetector gagal → fallback di bawah
+        }
       }
+      if(!useBarcodeDetector) runJsQRLoop();
     }).catch(()=>{
       const el=document.getElementById('scanSt');
       if(el) el.innerHTML='❌ Kamera tidak bisa diakses. <b>Buka via HTTPS</b> atau cari manual di bawah.';
