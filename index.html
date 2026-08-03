@@ -1068,9 +1068,12 @@ function allocatePayment(wid, amount){
     rem-=nom;
   }
 
-  // 3. Isi minggu depan (pre-bayar)
+  // 3. Isi minggu depan (pre-bayar) — TANPA BATAS, terus dialokasikan ke
+  // minggu-minggu berikutnya selama sisa uang masih cukup 1 nominal.
+  // (fo<10000 cuma pengaman teknis anti infinite-loop, bukan batas praktis —
+  // itu setara ±192 tahun ke depan, jadi Kredit yang tersisa beneran cuma recehan.)
   let fo=1;
-  while(rem>=nom && fo<53){
+  while(rem>=nom && nom>0 && fo<10000){
     const fd=new Date(); fd.setDate(fd.getDate()+(fo*7));
     const fk=weekKey(fd);
     if(!paid.includes(fk)&&!allocs.find(a=>a.weekKey===fk)){
@@ -1111,9 +1114,9 @@ function allocateTunggakan(wid, amount){
     rem-=nom;
   }
 
-  // 2. Sisa → minggu depan (pre-bayar)
+  // 2. Sisa → minggu depan (pre-bayar) — TANPA BATAS (lihat catatan di allocatePayment)
   let fo=1;
-  while(rem>=nom && fo<53){
+  while(rem>=nom && nom>0 && fo<10000){
     const fd=new Date(); fd.setDate(fd.getDate()+(fo*7));
     const fk=weekKey(fd);
     if(!paid.includes(fk)&&!allocs.find(a=>a.weekKey===fk)){
@@ -1382,16 +1385,16 @@ function pgHome(){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:12px">
       <div class="sb" style="text-align:center;padding:8px 4px;min-width:0">
-        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Masuk</div>
-        <div style="font-size:11px;font-weight:800;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt(all.totalRp)}</div>
+        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Saldo Kas</div>
+        <div style="font-size:11px;font-weight:800;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt((MEM.kasUmum||[]).reduce((s,r)=>s+(r.masuk||0)-(r.keluar||0),0))}</div>
       </div>
       <div class="sb" style="text-align:center;padding:8px 4px;min-width:0">
-        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Keluar</div>
-        <div style="font-size:11px;font-weight:800;color:var(--red);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt((MEM.kasJimpitan||[]).reduce((s,r)=>s+(r.keluar||0),0))}</div>
+        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Saldo Jimpitan</div>
+        <div style="font-size:11px;font-weight:800;color:var(--g);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt((MEM.kasJimpitan||[]).reduce((s,r)=>s+(r.masuk||0)-(r.keluar||0),0))}</div>
       </div>
       <div class="sb" style="text-align:center;padding:8px 4px;min-width:0">
-        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Saldo</div>
-        <div style="font-size:11px;font-weight:800;color:var(--gold);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt(all.totalRp-(MEM.kasJimpitan||[]).reduce((s,r)=>s+(r.keluar||0),0))}</div>
+        <div style="font-size:8.5px;font-weight:700;color:var(--tl);text-transform:uppercase;letter-spacing:.2px;margin-bottom:3px;white-space:nowrap">Total Tunggakan</div>
+        <div style="font-size:11px;font-weight:800;color:var(--red);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:'JetBrains Mono',monospace">${rpFmt(all.debtRp)}</div>
       </div>
     </div>
     ${isStaff||CU.role==='anggota'?`<div class="cd" style="margin-bottom:12px">
@@ -2060,14 +2063,19 @@ function doBayarTunggakan(){
 
 // ===== Riwayat Bayar Tunggakan (khusus dari tombol Bayar di menu Tunggakan) =====
 let _rtSearch='';
+let _rtBulan='';
 function pgRiwayatTunggakan(){
   if(CU.role!=='admin'&&CU.role!=='divisi'){go('tunggakan');return;}
   curPage='riwayatTunggakan';
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('tunggakan')">← Rekap Tunggakan</button>
     <div class="ct">📜 Riwayat Bayar Tunggakan</div>
-    <input class="si" id="rtSearch" placeholder="🔍 Cari nama anggota..." value="${_rtSearch}" oninput="_rtSearch=this.value;buildRiwayatTunggakan()" style="margin-bottom:8px">
-    <div style="font-size:12px;color:var(--tl);margin-bottom:10px">Menampilkan pembayaran tunggakan lewat tombol Bayar di menu ini saja.</div>
+    <input class="si" id="rtSearch" placeholder="🔍 Cari nama anggota..." value="${_rtSearch}" oninput="_rtSearch=this.value;buildRiwayatTunggakan()">
+    <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+      <label style="font-size:11px;font-weight:700;color:var(--tm);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">📅 Bulan</label>
+      <select class="fsel" id="rtBulanSel" style="flex:1;padding:7px 11px" onchange="_rtBulan=this.value;buildRiwayatTunggakan()"></select>
+    </div>
+    <div id="rtSummary"></div>
     <div class="cd"><div id="rtList"></div></div>`;
   buildRiwayatTunggakan();
 }
@@ -2090,20 +2098,84 @@ function buildRiwayatTunggakan(){
   });
   if(q) rows=rows.filter(r=>r.nama.toLowerCase().includes(q));
   rows.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  el.innerHTML=rows.length===0?'<div class="empty"><div class="ei">📭</div>Belum ada riwayat pembayaran tunggakan</div>':
-    rows.map(r=>{
-      const d=new Date(r.date);
-      const tgl=d.toLocaleDateString('id-ID')+' '+d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
-      return `<div class="ri">
-        <div class="rdot"></div>
-        <div style="flex:1">
-          <div class="rn">${r.nama} <span style="font-size:10px;color:var(--tl)">${r.rt}</span></div>
-          <div class="rm">${tgl}</div>
-          <div class="rm" style="margin-top:1px">${r.sisa>0?`Sisa tunggakan: <b style="color:var(--red)">${rpFmt(r.sisa)}</b>`:'<b style="color:var(--g)">Lunas</b>'}</div>
+
+  const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  // Kelompokkan per bulan biar enak dilihat, plus total tiap bulan
+  const bulanGroups={}; const bulanOrder=[];
+  rows.forEach(r=>{
+    const d=new Date(r.date);
+    const bk=`${d.getFullYear()}-${d.getMonth()}`;
+    if(!bulanGroups[bk]){ bulanGroups[bk]={label:`${mn[d.getMonth()]} ${d.getFullYear()}`,rows:[],total:0}; bulanOrder.push(bk); }
+    bulanGroups[bk].rows.push(r);
+    bulanGroups[bk].total+=r.total;
+  });
+
+  // Isi/segarkan dropdown bulan, sambil pertahankan pilihan yang masih valid
+  const sel=document.getElementById('rtBulanSel');
+  const sum=document.getElementById('rtSummary');
+  if(_rtBulan&&!bulanOrder.includes(_rtBulan)) _rtBulan='';
+  if(sel){
+    sel.innerHTML='<option value="">Semua Bulan</option>'+
+      bulanOrder.map(bk=>`<option value="${bk}"${bk===_rtBulan?' selected':''}>${bulanGroups[bk].label}</option>`).join('');
+  }
+
+  if(rows.length===0){
+    if(sum) sum.innerHTML='';
+    el.innerHTML='<div class="empty"><div class="ei">📭</div>Belum ada riwayat pembayaran tunggakan</div>';
+    return;
+  }
+
+  const tampilOrder=_rtBulan?[_rtBulan]:bulanOrder;
+  const grandTotal=tampilOrder.reduce((s,bk)=>s+(bulanGroups[bk]?bulanGroups[bk].total:0),0);
+  const grandJml=tampilOrder.reduce((s,bk)=>s+(bulanGroups[bk]?bulanGroups[bk].rows.length:0),0);
+
+  // Kartu ringkasan total gabungan — untuk bulan terpilih, atau gabungan semua bulan yg tampil
+  if(sum){
+    sum.innerHTML=`
+    <div style="background:linear-gradient(135deg,var(--g),var(--gl));border-radius:var(--r);
+      padding:16px 18px;margin-bottom:14px;box-shadow:var(--shm);color:#fff;
+      display:flex;justify-content:space-between;align-items:center">
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;opacity:.85">
+          💰 ${_rtBulan?('Total '+bulanGroups[_rtBulan].label):'Total Gabungan Semua Bulan'}
         </div>
-        <span class="ra">${rpFmt(r.total)}</span>
-      </div>`;
-    }).join('');
+        <div style="font-family:'Playfair Display',serif;font-size:26px;font-weight:700;margin-top:4px">${rpFmt(grandTotal)}</div>
+      </div>
+      <div style="text-align:right;background:rgba(255,255,255,.16);border-radius:12px;padding:8px 12px">
+        <div style="font-size:18px;font-weight:700;font-family:'JetBrains Mono',monospace">${grandJml}</div>
+        <div style="font-size:10px;opacity:.85">transaksi</div>
+      </div>
+    </div>`;
+  }
+
+  el.innerHTML = tampilOrder.map((bk,bi)=>{
+    const g=bulanGroups[bk]; if(!g) return '';
+    return `
+    <div style="${bi>0?'margin-top:18px':''}">
+      ${!_rtBulan?`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;
+        border-bottom:1.5px solid var(--gm);margin-bottom:6px">
+        <div style="font-weight:700;color:var(--g);font-size:13px">📅 ${g.label}</div>
+        <div style="font-weight:700;color:var(--gold);font-size:13px;font-family:'JetBrains Mono',monospace">${rpFmt(g.total)}</div>
+      </div>`:''}
+      ${g.rows.map(r=>{
+        const d=new Date(r.date);
+        const tgl=d.toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'});
+        const lunas=r.sisa<=0;
+        return `<div class="li">
+          <div class="av">${(r.nama||'?')[0]}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span class="wn">${r.nama}</span>
+              ${r.rt?`<span class="badge bp" style="font-size:9px;padding:2px 7px">${r.rt}</span>`:''}
+              <span class="badge ${lunas?'bp':'bu'}" style="font-size:9px;padding:2px 7px">${lunas?'✅ Lunas':'📌 Sisa '+rpFmt(r.sisa)}</span>
+            </div>
+            <div class="ws" style="margin-top:2px">${tgl}</div>
+          </div>
+          <span class="ra" style="font-size:14px">${rpFmt(r.total)}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+  }).join('');
   }, 250);
 }
 function exportTunggakan(){
@@ -2491,7 +2563,7 @@ function previewEditTrx(){
   const tw=weekKey(tglDate);
   if(rem>=nom2&&!paid.includes(tw)){ previewAllocs.push({weekKey:tw,isCredit:false,isDebt:false,nominal:nom2}); rem-=nom2; }
   for(const wk of debts){ if(rem<nom2)break; if(previewAllocs.find(a=>a.weekKey===wk))continue; previewAllocs.push({weekKey:wk,isCredit:false,isDebt:true,nominal:nom2}); rem-=nom2; }
-  let fo=1; while(rem>=nom2&&fo<53){ const fd=new Date(tglDate); fd.setDate(fd.getDate()+(fo*7)); const fk=weekKey(fd); if(!paid.includes(fk)&&!previewAllocs.find(a=>a.weekKey===fk)){ previewAllocs.push({weekKey:fk,isCredit:false,isDebt:false,nominal:nom2}); rem-=nom2; } fo++; }
+  let fo=1; while(rem>=nom2&&nom2>0&&fo<10000){ const fd=new Date(tglDate); fd.setDate(fd.getDate()+(fo*7)); const fk=weekKey(fd); if(!paid.includes(fk)&&!previewAllocs.find(a=>a.weekKey===fk)){ previewAllocs.push({weekKey:fk,isCredit:false,isDebt:false,nominal:nom2}); rem-=nom2; } fo++; }
   if(rem>0) previewAllocs.push({weekKey:'KREDIT',nominal:rem,isCredit:true,isDebt:false});
   el.style.display='block';
   el.innerHTML='<b style="color:var(--g)">Alokasi baru:</b><br>'+previewAllocs.map(a=>
@@ -2581,10 +2653,6 @@ function buildWarga(){
       const dw=debtWeeks(w.id).length;
       const tot=MEM.transaksi.filter(t=>t.wargaId===w.id&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
       const exStat=isExempt(w);
-      const hasSd=!exStat&&w.startDate;
-      const exBtnIcon=exStat==='permanent'?'🚫':exStat==='temp'?'⏳':hasSd?'📅':'⚙️';
-      const exBtnBg=exStat?'var(--rl)':hasSd?'#e8f5e9':'#f5f5f5';
-      const exBtnColor=exStat?'var(--red)':hasSd?'#2e7d32':'#888';
       return`<div class="li">
         <div class="av">${w.name[0]}</div>
         <div style="flex:1">
@@ -2595,17 +2663,60 @@ function buildWarga(){
           <span class="badge ${exStat?'bu':paid?'bp':dw>0?'bd':'bu'}">${exStat?'🚫 Dikecualikan':paid?'✓ Bayar':dw>0?'⚠️ Nunggak':'⏳ Belum'}</span>
           <div style="display:flex;gap:3px">
             <button class="bsm bsm-g" onclick="showQR('${w.id}')">QR</button>
-            ${canEdit?`<button class="bsm" onclick="showWargaWeekDetail('${w.id}')" title="Detail per minggu"
-                style="background:#e8f0fe;color:#1a73e8;border:none;border-radius:7px;padding:4px 8px;cursor:pointer;font-size:13px">📖</button>
-              <button class="bsm" onclick="openExempt('${w.id}')" style="background:${exBtnBg};color:${exBtnColor};border:none;border-radius:7px;padding:4px 8px;cursor:pointer;font-size:13px" title="Pengaturan Tunggakan">${exBtnIcon}</button>
-              <button class="bsm bsm-o" onclick="openEditW('${w.id}')">✏️</button>
-              <button class="bsm bsm-r" onclick="delWarga('${w.id}')">🗑️</button>`:''}
+            ${canEdit?`<button class="bsm" onclick="_openWargaMenu('${w.id}')" title="Menu lainnya"
+                style="background:#f0f0f0;color:#555;border:none;border-radius:7px;padding:4px 12px;cursor:pointer;font-size:15px;font-weight:800;letter-spacing:1px;line-height:1">⋮</button>`:''}
           </div>
         </div>
       </div>`;
     }).join('');
   }, 250);
 }
+// ── MENU AKSI ANGGOTA (tombol ⋮) ─────────────────────────────
+function _openWargaMenu(wid){
+  const w=MEM.warga.find(x=>x.id===wid); if(!w)return;
+  const existing=document.getElementById('_wMenuModal'); if(existing) existing.remove();
+  const exStat=isExempt(w);
+  const hasSd=!exStat&&w.startDate;
+  const exIcon=exStat==='permanent'?'🚫':exStat==='temp'?'⏳':hasSd?'📅':'⚙️';
+  const exLabel=exStat==='permanent'?'Dikecualikan Permanen':exStat==='temp'?'Dikecualikan Sementara':hasSd?'Ada Tanggal Mulai':'Pengaturan Tunggakan';
+  const modal=document.createElement('div');
+  modal.id='_wMenuModal';
+  modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;display:flex;align-items:flex-end;justify-content:center';
+  modal.innerHTML=`
+    <div style="background:#fff;border-radius:18px 18px 0 0;width:100%;max-width:520px;padding-bottom:10px">
+      <div style="padding:14px 16px 10px;border-bottom:1px solid var(--b);display:flex;align-items:center;gap:10px">
+        <div style="width:36px;height:36px;border-radius:50%;background:var(--gm);display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--g);font-size:14px;flex-shrink:0">${w.name[0]}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:14px;color:var(--t)">${w.name}</div>
+          <div style="font-size:11px;color:var(--tl)">${w.rt}</div>
+        </div>
+        <button onclick="document.getElementById('_wMenuModal').remove()"
+          style="background:#f0f0f0;border:none;border-radius:50%;width:28px;height:28px;font-size:14px;cursor:pointer;flex-shrink:0">✕</button>
+      </div>
+      <div style="padding:8px">
+        <button onclick="document.getElementById('_wMenuModal').remove();showWargaWeekDetail('${wid}')"
+          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--t);cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px">📖</span><span>Detail per Minggu</span>
+        </button>
+        <button onclick="document.getElementById('_wMenuModal').remove();openExempt('${wid}')"
+          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--t);cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px">${exIcon}</span><span>${exLabel}</span>
+        </button>
+        <button onclick="document.getElementById('_wMenuModal').remove();openEditW('${wid}')"
+          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--t);cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px">✏️</span><span>Edit Data</span>
+        </button>
+        <div style="height:1px;background:var(--b);margin:4px 12px"></div>
+        <button onclick="document.getElementById('_wMenuModal').remove();delWarga('${wid}')"
+          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--red);cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px">🗑️</span><span>Hapus Anggota</span>
+        </button>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e=>{ if(e.target===modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
 // ── PENGECUALIAN TUNGGAKAN ────────────────────────────────────
 // Return: 'permanent' | 'temp' | null
 function isExempt(w){
@@ -2902,9 +3013,9 @@ function allocatePaymentForDate(wid, amount, refDate){
     rem-=nom;
   }
 
-  // 3. Isi minggu depan (pre-bayar)
+  // 3. Isi minggu depan (pre-bayar) — TANPA BATAS (lihat catatan di allocatePayment)
   let fo=1;
-  while(rem>=nom && fo<53){
+  while(rem>=nom && nom>0 && fo<10000){
     const fd=new Date(refDate); fd.setDate(fd.getDate()+(fo*7));
     const fk=weekKey(fd);
     if(!paid.includes(fk)&&!allocs.find(a=>a.weekKey===fk)){
@@ -3515,36 +3626,42 @@ function _buildRekapJimpitan(){
     // PERBAIKAN BUG: Bayar tunggakan difilter berdasarkan TANGGAL BAYAR (t.date),
     // bukan weekKey. weekKey tunggakan = minggu yg dilunasi (minggu lama),
     // tapi harus muncul di rekap minggu SAAT DIBAYAR.
+    // CATATAN: hanya tunggakan yang dilunasi lewat SCAN/INPUT MANUAL biasa yang
+    // dihitung di sini. Pembayaran lewat tombol "Bayar" khusus di menu Tunggakan
+    // (source==='tunggakan') SENGAJA tidak dimasukkan — sudah ada halaman
+    // tersendiri "Riwayat Bayar Tunggakan" untuk itu, biar tidak dobel/campur.
     const tunggakanTrx=MEM.transaksi.filter(t=>{
       if(!t.isDebt||t.isCredit) return false;
+      if(t.source==='tunggakan') return false;
       const bayarDate=new Date(t.date);
       return bayarDate>=wk.start&&bayarDate<=wk.end;
     });
     const tunggakanRp=tunggakanTrx.reduce((s,t)=>s+t.nominal,0);
-    // Hitung per warga
-    const tunggakanPerWarga={};
-    tunggakanTrx.forEach(t=>{
-      const w=MEM.warga.find(x=>x.id===t.wargaId);
-      const nama=w?w.name:t.wargaId;
-      if(!tunggakanPerWarga[nama]) tunggakanPerWarga[nama]=0;
-      tunggakanPerWarga[nama]+=t.nominal;
-    });
 
     // Kredit masuk — kredit tidak punya weekKey per-minggu (selalu 'KREDIT'),
-    // jadi difilter berdasarkan TANGGAL KEJADIANNYA (t.date), sama seperti Bayar Tunggakan
+    // jadi difilter berdasarkan TANGGAL KEJADIANNYA (t.date).
+    // Sama seperti tunggakanTrx: kredit yang berasal dari tombol Bayar khusus
+    // di menu Tunggakan (source==='tunggakan') dikecualikan, karena sudah
+    // punya halaman sendiri "Riwayat Bayar Tunggakan" — biar tidak dobel catat.
     const kreditTrx=MEM.transaksi.filter(t=>{
       if(!t.isCredit) return false;
+      if(t.source==='tunggakan') return false;
       const d=new Date(t.date);
       return d>=wk.start&&d<=wk.end;
     });
     const kreditRp=kreditTrx.reduce((s,t)=>s+t.nominal,0);
 
+    // GABUNG ke Pemasukan Jimpitan: tunggakan yang dilunasi lewat scan/input
+    // biasa, DAN kredit (sisa lebih bayar yang belum genap 1x nominal),
+    // dianggap uang jimpitan minggu ini juga karena duitnya beneran diterima
+    // di minggu ini — jadi tidak ditampilkan sebagai section terpisah lagi,
+    // langsung disatukan ke iuranTrx supaya kehitung sesuai RT warganya.
+    const pemasukanTrx=iuranTrx.concat(tunggakanTrx).concat(kreditTrx);
+
     // Edit override dari admin
     const ek=MEM.rekapEdit[wk.key]||{};
-    const iuranFinal   = ek.iuran    !== undefined ? ek.iuran    : iuranRp;
-    const tunggakanFinal=ek.tunggakan!== undefined ? ek.tunggakan: tunggakanRp;
-    const kreditFinal  = ek.kredit   !== undefined ? ek.kredit   : kreditRp;
-    const total=iuranFinal+tunggakanFinal+kreditFinal;
+    const iuranFinal   = ek.iuran    !== undefined ? ek.iuran    : iuranRp+tunggakanRp+kreditRp;
+    const total=iuranFinal;
     totalBulan+=total;
 
     // Tandai status minggu: hanya minggu aktif saat ini = Berjalan
@@ -3554,10 +3671,6 @@ function _buildRekapJimpitan(){
     const adalahMingguIni=(wk.key===tw);
     const sudahLewat=!adalahMingguIni&&isWeekClosed(wk.key);
     const belumLewat=!adalahMingguIni&&!sudahLewat&&now<wk.start;
-
-const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:2px">
-  ${Object.entries(tunggakanPerWarga).map(([n,r])=>
-    `<span style="font-size:11px;color:#666">⚠ ${n}: <b style="color:var(--red)">${rpFmt(r)}</b></span>`).join('')}</div>`;
 
     html+=`
     <div class="cd" style="margin-bottom:8px;padding:12px${belumLewat?';opacity:0.5':''}">
@@ -3576,7 +3689,7 @@ const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;
           const rts=['RT 01','RT 02'];
           return rts.map(rt=>{
             const wargaRt=MEM.warga.filter(w=>w.rt===rt).map(w=>w.id);
-            const iuranRtTrx=iuranTrx.filter(t=>wargaRt.includes(t.wargaId));
+            const iuranRtTrx=pemasukanTrx.filter(t=>wargaRt.includes(t.wargaId));
             const iuranRtRp=iuranRtTrx.reduce((s,t)=>s+t.nominal,0);
             const ekRt=MEM.rekapEdit[wk.key+'_'+rt.replace(' ','')]||{};
             const iuranRtFinal=ekRt.iuran!==undefined?ekRt.iuran:iuranRtRp;
@@ -3596,31 +3709,6 @@ const tunggakanDetail=`<div style="margin-left:12px;display:flex;flex-wrap:wrap;
           </div>`;
         })()}
       </div>
-
-      <div style="padding:6px 0;${kreditFinal>0?'border-bottom:1px solid var(--b)':''}">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div style="font-size:11px;color:var(--tm);font-weight:600">Bayar Tunggakan</div>
-          <div style="display:flex;align-items:center;gap:6px">
-            ${isAdmin
-              ? `<input type="number" value="${tunggakanFinal}" min="0"
-                  style="width:80px;text-align:right;border:1px solid #ccc;border-radius:6px;padding:2px 6px;font-size:12px"
-                  onchange="_saveRekapEdit('${wk.key}','tunggakan',this.value)">`
-              : `<span style="font-weight:700;color:var(--red);font-size:13px;font-family:'JetBrains Mono',monospace">${rpFmt(tunggakanFinal)}</span>`}
-          </div>
-        </div>
-        ${tunggakanDetail}
-      </div>
-
-      ${kreditFinal>0||isAdmin?`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--b)">
-        <div style="font-size:11px;color:var(--tm);font-weight:600">Kredit Masuk</div>
-        <div style="display:flex;align-items:center;gap:6px">
-          ${isAdmin
-            ? `<input type="number" value="${kreditFinal}" min="0"
-                style="width:80px;text-align:right;border:1px solid #ccc;border-radius:6px;padding:2px 6px;font-size:12px"
-                onchange="_saveRekapEdit('${wk.key}','kredit',this.value)">`
-            : `<span style="font-weight:700;color:var(--gold);font-size:13px;font-family:'JetBrains Mono',monospace">${rpFmt(kreditFinal)}</span>`}
-        </div>
-      </div>`:''}
 
       <div style="border-top:1px solid #e0e0e0;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:center">
         <div style="font-weight:700">Total Minggu</div>
@@ -4338,7 +4426,7 @@ function _buildDaftarKegiatan(){
     return `<div class="cd" style="cursor:pointer;margin-bottom:10px" onclick="_bukaKegiatan('${kg.id}')">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="font-weight:700;font-size:15px;color:var(--g)">${kg.nama}</div>
-        ${canEdit?`<div style="display:flex;gap:5px" onclick="event.stopPropagation()">
+        ${CU.role==='admin'?`<div style="display:flex;gap:5px" onclick="event.stopPropagation()">
           <button class="bsm bsm-o" onclick="_openModalKegiatan('${kg.id}')">✏️</button>
           <button class="bsm bsm-r" onclick="_hapusKegiatan('${kg.id}')">🗑️</button>
         </div>`:''}
@@ -4685,6 +4773,7 @@ function _hapusKgKas(kid){
 
 // ── MODAL BUAT/EDIT KEGIATAN ──────────────────────────────────
 function _openModalKegiatan(id){
+  if(id&&CU.role!=='admin'){showToast('❌ Hanya admin yang bisa mengubah kegiatan');return;}
   const kg=id?MEM.kegiatan.find(x=>x.id===id):null;
   const ex=document.getElementById('_kgModal');
   if(ex) ex.remove();
@@ -4736,6 +4825,7 @@ function _simpanKegiatan(id){
 }
 
 function _hapusKegiatan(id){
+  if(CU.role!=='admin'){showToast('❌ Hanya admin yang bisa menghapus kegiatan');return;}
   const kg=MEM.kegiatan.find(x=>x.id===id);
   if(!confirm('Hapus kegiatan "'+kg.nama+'"?\nSemua data iuran & kas akan ikut terhapus.'))return;
   MEM.kegiatan=MEM.kegiatan.filter(x=>x.id!==id);
