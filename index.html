@@ -318,11 +318,11 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
       <b>☁️ PERHATIAN!!!</b> PASTIKAN TERHUBUNG JARINGAN SAAT LOGIN.
     </div>
     <div class="fg"><label>Username</label>
-      <input id="lu" class="fi" placeholder="Username" autocomplete="off" name="lu-field" onkeydown="if(event.key==='Enter')login()">
+      <input id="lu" class="fi" placeholder="Username" autocomplete="username" name="lu-field" onkeydown="if(event.key==='Enter')login()">
     </div>
     <div class="fg"><label>Password</label>
       <div style="position:relative">
-        <input id="lp" class="fi" type="password" placeholder="Password" autocomplete="new-password" name="lp-field" onkeydown="if(event.key==='Enter')login()" style="padding-right:44px;margin:0">
+        <input id="lp" class="fi" type="password" placeholder="Password" autocomplete="current-password" name="lp-field" onkeydown="if(event.key==='Enter')login()" style="padding-right:44px;margin:0">
         <span onclick="var i=document.getElementById('lp');i.type=i.type==='password'?'text':'password';this.textContent=i.type==='password'?'👁️':'🙈'"
           style="position:absolute;right:12px;top:50%;transform:translateY(-50%);cursor:pointer;font-size:17px;line-height:1;user-select:none">👁️</span>
       </div>
