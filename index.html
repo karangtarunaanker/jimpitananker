@@ -378,6 +378,8 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
     <div class="fg"><label>Nama</label><input id="ew_name" class="fi" placeholder="Nama lengkap"></div>
     <div class="fg" style="margin-top:10px"><label>RT</label>
       <select id="ew_rt" class="fi"><option>RT 01</option><option>RT 02</option></select></div>
+    <div class="fg" style="margin-top:10px"><label>No. WhatsApp</label>
+      <input id="ew_phone" class="fi" type="tel" placeholder="cth: 08123456789" inputmode="numeric"></div>
     <div class="fg" style="margin-top:10px">
       <label>Mulai Tercatat Iuran</label>
       <input id="ew_start" class="fi" type="date">
@@ -560,7 +562,7 @@ const W2=['ABRIANO','AFRI','AGUNG','AHMAD','ANA','ANGGA','ARDI','ARIF','ARJUN','
 // localStorage HANYA untuk antrian offline (offQ & offAbsenQ)
 // Data MEM tidak disimpan di localStorage — selalu ambil dari Firebase
 // ════════════════════════════════════════════════════════════
-let MEM = {users:[],warga:[],transaksi:[],nominal:2000,seeded:false,kasUmum:[],kasJimpitan:[],rekapEdit:{},absen:[],daftarKelompok:[],kegiatan:[]};
+let MEM = {users:[],warga:[],transaksi:[],nominal:2000,nominalHistory:[{from:'2000-01-01',amount:2000}],seeded:false,kasUmum:[],kasJimpitan:[],rekapEdit:{},absen:[],daftarKelompok:[],kegiatan:[]};
 let offQ      = JSON.parse(localStorage.getItem('jmp_q')||'[]');
 let offAbsenQ = JSON.parse(localStorage.getItem('jmp_absen_q')||'[]');
 let isOnline  = navigator.onLine;
@@ -593,6 +595,16 @@ function _normMEM(){
   if(!Array.isArray(MEM.daftarKelompok)) MEM.daftarKelompok=[];
   if(!Array.isArray(MEM.kegiatan))        MEM.kegiatan=[];
   if(!MEM.rekapEdit)                     MEM.rekapEdit={};
+  // Migrasi: data lama cuma punya MEM.nominal tunggal (tanpa histori) →
+  // dibuatkan 1 entri histori berlaku sejak 2000-01-01 (efeknya: transparan,
+  // semua minggu lama tetap dihitung pakai nominal lama seperti sebelumnya)
+  if(!Array.isArray(MEM.nominalHistory)||!MEM.nominalHistory.length){
+    MEM.nominalHistory=[{from:'2000-01-01',amount:MEM.nominal||2000}];
+  }
+  // MEM.nominal selalu disinkronkan ke tarif yang berlaku HARI INI, supaya
+  // kode lama yang masih baca MEM.nominal langsung (scan, transaksi manual,
+  // dsb) otomatis pakai tarif terbaru tanpa perlu diubah satu-satu.
+  _syncNominal();
 }
 
 function saveMEM(){
@@ -601,6 +613,7 @@ function saveMEM(){
       'jmpData/users':       MEM.users,
       'jmpData/warga':       MEM.warga,
       'jmpData/nominal':     MEM.nominal,
+      'jmpData/nominalHistory': MEM.nominalHistory||[],
       'jmpData/seeded':      MEM.seeded,
       'jmpData/kasUmum':     MEM.kasUmum||[],
       'jmpData/kasJimpitan': MEM.kasJimpitan||[],
@@ -805,7 +818,7 @@ function seedIfNeeded(){
     ...[1,2,3,4,5,6,7].map(i=>({id:'p'+i,name:'Petugas Kelompok '+i,role:'petugas',kelompok:i,username:'petugas'+i,password:'petugas123'})),
   ];
   MEM.warga.forEach(w=>MEM.users.push({id:'u_'+w.id,name:w.name,role:'anggota',wargaId:w.id,username:w.id.toLowerCase(),password:'anggota123'}));
-  MEM.seeded=true; MEM.nominal=2000;
+  MEM.seeded=true; MEM.nominal=2000; MEM.nominalHistory=[{from:'2000-01-01',amount:2000}];
   saveMEM();
 }
 loadMEM();
@@ -1001,6 +1014,98 @@ function weekLabel(k){
   return `${mn[+m]} Mgg ${wn.replace('W','')}`;
 }
 function rpFmt(n){ return 'Rp '+(n||0).toLocaleString('id-ID'); }
+
+// ── HISTORI TARIF NOMINAL ─────────────────────────────────────
+// MEM.nominalHistory: [{from:'YYYY-MM-DD', amount:N}, ...] — tarif "amount"
+// berlaku mulai tanggal "from" sampai ada entri berikutnya yang "from"-nya
+// lebih baru. MEM.nominal SELALU disinkronkan ke tarif yang berlaku HARI INI
+// (lihat _syncNominal()), jadi kode lama yang baca MEM.nominal langsung
+// (scan, transaksi manual minggu berjalan, dsb) otomatis ikut tarif terbaru.
+// Untuk TUNGGAKAN (minggu-minggu lampau), selalu pakai nominalForWeek(wk) /
+// hitungTunggakanRp(wid) supaya tiap minggu dihitung dengan tarif yang
+// berlaku SAAT minggu itu, bukan tarif hari ini.
+function nominalHistorySorted(){
+  const h=(MEM.nominalHistory&&MEM.nominalHistory.length)?MEM.nominalHistory:[{from:'2000-01-01',amount:MEM.nominal||0}];
+  return h.slice().sort((a,b)=>a.from.localeCompare(b.from));
+}
+function nominalOnDate(d){
+  const hist=nominalHistorySorted();
+  let cur=hist[0].amount;
+  for(const h of hist){ if(new Date(h.from+'T00:00:00')<=d) cur=h.amount; else break; }
+  return cur;
+}
+function nominalForWeek(wk){
+  const sun=_sundayOfWeekKey(wk);
+  return nominalOnDate(sun||new Date());
+}
+function _syncNominal(){ MEM.nominal=nominalOnDate(new Date()); }
+// Total rupiah tunggakan 1 anggota, dihitung per-minggu pakai tarif yang
+// berlaku SAAT minggu itu (bukan tarif hari ini)
+function hitungTunggakanRp(wid){
+  return debtWeeks(wid).reduce((s,wk)=>s+nominalForWeek(wk),0);
+}
+
+// ── WHATSAPP HELPERS ──────────────────────────────────────────
+// Ikon WA resmi (mono, mewarisi currentColor) buat dipakai di tombol
+const WA_ICON_SVG='<svg viewBox="0 0 32 32" width="15" height="15" fill="currentColor" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-2px"><path d="M16.004 3C9.377 3 4 8.373 4 15c0 2.386.7 4.61 1.912 6.48L4 29l7.72-1.87A11.94 11.94 0 0 0 16.004 27C22.63 27 28 21.627 28 15S22.63 3 16.004 3Zm6.99 16.94c-.297.833-1.47 1.53-2.404 1.73-.64.137-1.475.246-4.29-.92-3.6-1.49-5.92-5.13-6.1-5.37-.176-.24-1.46-1.94-1.46-3.7s.92-2.62 1.25-2.98c.33-.36.72-.45.96-.45.24 0 .48.003.69.014.222.01.52-.084.812.62.297.72 1.01 2.48 1.098 2.66.088.18.147.39.03.63-.117.24-.176.39-.35.6-.176.21-.37.47-.53.63-.176.176-.36.367-.155.72.206.353.913 1.508 1.96 2.44 1.347 1.2 2.483 1.573 2.836 1.75.353.176.56.147.766-.088.206-.235.883-1.03 1.118-1.383.235-.353.47-.294.79-.176.323.117 2.05.967 2.4 1.143.353.176.588.264.674.412.088.147.088.85-.21 1.68Z"/></svg>';
+
+// Ubah nomor lokal (08xxx / +62xxx / 62xxx) jadi format internasional 62xxx tanpa spasi/simbol
+function normalizePhone(phone){
+  if(!phone) return '';
+  let p=phone.replace(/[^0-9+]/g,'');
+  if(p.startsWith('+')) p=p.slice(1);
+  if(p.startsWith('0')) p='62'+p.slice(1);
+  if(!p.startsWith('62')) p='62'+p;
+  return p;
+}
+
+// Tanggal batas bayar: tanggal 15 bulan depan dari hari ini (sama seperti fitur cetak surat)
+function tglBatasWA(){
+  const now=new Date();
+  const bln15=new Date(now.getFullYear(),now.getMonth()+1,15);
+  return bln15.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+}
+
+// Susun pesan penagihan tunggakan buat 1 anggota
+function buildPesanTunggakan(w){
+  const dw=w.dw||[];
+  return `Assalamu'alaikum Wr. Wb.
+
+Yth. Bapak/Ibu *${w.name}*,
+
+Kami dari Divisi Jimpitan ingin menginformasikan bahwa saat ini tercatat *tunggakan jimpitan* sebesar:
+
+💰 *${rpFmt(w.dr)}* (${dw.length} minggu, sejak ${weekLabel(dw[0])})
+
+Mohon kesediaannya untuk melunasi tunggakan tersebut sebelum tanggal *${tglBatasWA()}*.
+
+Atas perhatian dan kerja samanya, kami ucapkan terima kasih 🙏
+
+Hormat kami,
+*Divisi Jimpitan*`;
+}
+
+// Buka WhatsApp ke nomor anggota, opsional dengan teks prefilled
+function openWA(phone,text){
+  const p=normalizePhone(phone);
+  if(!p){ showToast('❌ Nomor WA belum diisi'); return; }
+  const url='https://wa.me/'+p+(text?('?text='+encodeURIComponent(text)):'');
+  window.open(url,'_blank');
+}
+
+// Tombol kirim WA di list Tunggakan (pakai pesan otomatis)
+function kirimWATunggakan(wid){
+  const w=window._tDebtors&&window._tDebtors.find(x=>x.id===wid);
+  if(!w){ showToast('❌ Data anggota tidak ditemukan'); return; }
+  openWA(w.phone,buildPesanTunggakan(w));
+}
+
+// Tombol kirim WA di Daftar Anggota (tanpa pesan otomatis)
+function kirimWAAnggota(wid){
+  const w=MEM.warga.find(x=>x.id===wid);
+  if(!w){ showToast('❌ Data anggota tidak ditemukan'); return; }
+  openWA(w.phone);
+}
 function showToast(m,dur=2800){
   const t=document.getElementById('toast');
   if(!t)return;
@@ -1061,11 +1166,14 @@ function allocatePayment(wid, amount){
   }
 
   // 2. Bayar tunggakan (paling baru telat dulu, sisanya terlama→termuda)
+  // Tiap minggu tunggakan dibayar sesuai TARIF YANG BERLAKU SAAT minggu itu,
+  // bukan tarif hari ini (histori tarif)
   for(const wk of _debtPayOrder(debts)){
-    if(rem<nom) break;
     if(allocs.find(a=>a.weekKey===wk)) continue;
-    allocs.push({weekKey:wk,nominal:nom,isCredit:false,isDebt:true});
-    rem-=nom;
+    const wkNom=nominalForWeek(wk);
+    if(rem<wkNom) break;
+    allocs.push({weekKey:wk,nominal:wkNom,isCredit:false,isDebt:true});
+    rem-=wkNom;
   }
 
   // 3. Isi minggu depan (pre-bayar) — TANPA BATAS, terus dialokasikan ke
@@ -1108,10 +1216,12 @@ function allocateTunggakan(wid, amount){
 
   // 1. Bayar tunggakan (paling baru telat dulu, sisanya terlama→termuda)
   //    TIDAK ada step minggu berjalan — ini bedanya dengan scan (allocatePayment)
+  //    Tiap minggu dibayar sesuai tarif yang berlaku saat minggu itu (histori tarif)
   for(const wk of _debtPayOrder(debts)){
-    if(rem<nom) break;
-    allocs.push({weekKey:wk,nominal:nom,isCredit:false,isDebt:true});
-    rem-=nom;
+    const wkNom=nominalForWeek(wk);
+    if(rem<wkNom) break;
+    allocs.push({weekKey:wk,nominal:wkNom,isCredit:false,isDebt:true});
+    rem-=wkNom;
   }
 
   // 2. Sisa → minggu depan (pre-bayar) — TANPA BATAS (lihat catatan di allocatePayment)
@@ -1150,7 +1260,7 @@ function getRTStats(rt){
   warga.forEach(w=>{
     const dwLen=debtWeeks(w.id).length;
     if(dwLen>0) debtCount++;
-    debtRp+=dwLen*MEM.nominal;
+    debtRp+=hitungTunggakanRp(w.id);
   });
   return{total:warga.length,paid:paid.length,unpaid:warga.length-paid.length,totalRp,prevWeekRp,debtCount,debtRp};
 }
@@ -1709,7 +1819,7 @@ async function doConfirm(){
 }
 
 // ── REKAP ────────────────────────────────────────────────────
-let rRT='RT 01', rMon=new Date().getMonth(), rYear=new Date().getFullYear();
+let rRT='all', rMon=new Date().getMonth(), rYear=new Date().getFullYear();
 // Flag untuk mendeteksi apakah rekap sudah pernah dibuka (agar reset ke bulan berjalan saat masuk fresh)
 let _rekapFreshEntry=true;
 function _getRbulanTahunMap(){
@@ -1775,9 +1885,10 @@ function pgRekap(_keepState){
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('home')">← Beranda</button>
     <div class="ct">📊 Rekap Iuran</div>
-    <div class="fr">
-      <button class="fp ${rRT==='RT 01'?'active':''}" onclick="rRT='RT 01';buildRekap()">RT 01</button>
-      <button class="fp ${rRT==='RT 02'?'active':''}" onclick="rRT='RT 02';buildRekap()">RT 02</button>
+    <div class="fr" id="rFR">
+      <button class="fp ${rRT==='all'?'active':''}" id="rAll" onclick="filterRekap('all')">Semua</button>
+      <button class="fp ${rRT==='RT 01'?'active':''}" id="rRT1" onclick="filterRekap('RT 01')">RT 01</button>
+      <button class="fp ${rRT==='RT 02'?'active':''}" id="rRT2" onclick="filterRekap('RT 02')">RT 02</button>
     </div>
     <div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-bottom:12px;align-items:end">
       <div>
@@ -1817,8 +1928,15 @@ function getWeeksForMonth(mon,year){
   }
   return weeks;
 }
+function filterRekap(f){
+  rRT=f;
+  document.querySelectorAll('#rFR .fp').forEach(b=>b.classList.remove('active'));
+  document.getElementById({all:'rAll','RT 01':'rRT1','RT 02':'rRT2'}[f]).classList.add('active');
+  buildRekap();
+}
 function buildRekap(){
-  const warga=MEM.warga.filter(w=>w.rt===rRT);
+  const warga=(rRT==='all'?MEM.warga:MEM.warga.filter(w=>w.rt===rRT))
+    .slice().sort((a,b)=>a.name.localeCompare(b.name,'id'));
   const wks=getWeeksForMonth(rMon,rYear);
   const el=document.getElementById('rekapT'); if(!el)return;
   if(!warga.length){el.innerHTML='<div class="empty"><div class="ei">📭</div>Belum ada anggota</div>';return;}
@@ -1836,7 +1954,7 @@ function buildRekap(){
       return nominalAktual>0?`<td class="cp">${rpFmt(nominalAktual)}</td>`:`<td class="cu">-</td>`;
     });
     html+=`<tr style="${i%2===1?'background:#f7fbf8':''}">
-      <td>${w.name}</td>${cells.join('')}
+      <td>${w.name}${rRT==='all'?` <span style="font-size:10px;color:var(--tl);font-weight:400">(${w.rt})</span>`:''}</td>${cells.join('')}
       <td class="ctot">${rpFmt(tot)}</td>
     </tr>`;
   });
@@ -1943,8 +2061,9 @@ function buildTunggakan(f){
   _debounce('buildTunggakan', ()=>{
   const q=(document.getElementById('tSearch')||{}).value?.toLowerCase()||'';
   const warga=MEM.warga.filter(w=>(f==='all'||w.rt===f)&&(!q||w.name.toLowerCase().includes(q)));
-  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:debtWeeks(w.id).length*MEM.nominal}))
+  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:hitungTunggakanRp(w.id)}))
     .filter(w=>w.dw.length>0).sort((a,b)=>b.dw.length-a.dw.length);
+  window._tDebtors=debtors;
   const totalDebt=debtors.reduce((s,w)=>s+w.dr,0);
   document.getElementById('tStats').innerHTML=`
     <div style="display:grid;grid-template-columns:1fr 1.6fr;gap:8px;margin-bottom:8px">
@@ -1966,7 +2085,11 @@ function buildTunggakan(f){
         <div class="wn">${w.name} <span style="font-size:11px;color:var(--tl)">${w.rt}</span></div>
         <div class="ws">${rpFmt(w.dr)} · Terlama: ${weekLabel(w.dw[0])}</div>
       </div>
-      ${canEdit?`<button class="bsm bsm-g" onclick="openBayarTunggakan('${w.id}')">Bayar</button>`:''}
+      ${canEdit?`<div style="display:flex;gap:4px">
+        <button class="bsm" onclick="kirimWATunggakan('${w.id}')"
+          style="background:#e7f9ee;color:#1fa855;border:none;border-radius:7px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;display:flex;align-items:center;gap:4px;justify-content:center">${WA_ICON_SVG}</button>
+        <button class="bsm bsm-g" onclick="openBayarTunggakan('${w.id}')">Bayar</button>
+      </div>`:''}
     </div>`).join('');
   }, 250);
 }
@@ -2019,7 +2142,7 @@ function openBayarTunggakan(wid){
   const dw=debtWeeks(wid);
   document.getElementById('moTunggakanInfo').innerHTML=`
     <div class="mrow"><span class="mlb">Nama</span><span class="mvl">${tunggakanWarga.name}</span></div>
-    <div class="mrow"><span class="mlb">Tunggakan</span><span class="mvl r">${dw.length} minggu (${rpFmt(dw.length*MEM.nominal)})</span></div>
+    <div class="mrow"><span class="mlb">Tunggakan</span><span class="mvl r">${dw.length} minggu (${rpFmt(dw.reduce((s,wk)=>s+nominalForWeek(wk),0))})</span></div>
     <div class="mrow"><span class="mlb">Terlama</span><span class="mvl">${weekLabel(dw[0])}</span></div>`;
   document.getElementById('bt_nom').value='';
   document.getElementById('bt_preview').textContent='Masukkan nominal...';
@@ -2094,7 +2217,7 @@ function buildRiwayatTunggakan(){
   });
   let rows=Object.values(groups).map(g=>{
     const w=MEM.warga.find(x=>x.id===g.wargaId);
-    return {...g,nama:w?w.name:g.wargaId,rt:w?w.rt:'',sisa:debtWeeks(g.wargaId).length*MEM.nominal};
+    return {...g,nama:w?w.name:g.wargaId,rt:w?w.rt:'',sisa:hitungTunggakanRp(g.wargaId)};
   });
   if(q) rows=rows.filter(r=>r.nama.toLowerCase().includes(q));
   rows.sort((a,b)=>new Date(b.date)-new Date(a.date));
@@ -2180,7 +2303,7 @@ function buildRiwayatTunggakan(){
 }
 function exportTunggakan(){
   const warga=MEM.warga.filter(w=>tFilter==='all'||w.rt===tFilter);
-  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:debtWeeks(w.id).length*MEM.nominal}))
+  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:hitungTunggakanRp(w.id)}))
     .filter(w=>w.dw.length>0).sort((a,b)=>b.dw.length-a.dw.length);
   const rows=[
     [`Laporan Tunggakan Jimpitan — ${new Date().toLocaleDateString('id-ID')}`],[],
@@ -2225,7 +2348,7 @@ function terbilangRupiah(n){
 
 function openPrintTunggakan(){
   const warga=MEM.warga.filter(w=>tFilter==='all'||w.rt===tFilter);
-  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:debtWeeks(w.id).length*MEM.nominal}))
+  const debtors=warga.map(w=>({...w,dw:debtWeeks(w.id),dr:hitungTunggakanRp(w.id)}))
     .filter(w=>w.dw.length>0).sort((a,b)=>b.dw.length-a.dw.length);
   if(!debtors.length){showToast('✅ Tidak ada anggota menunggak');return;}
 
@@ -2562,7 +2685,7 @@ function previewEditTrx(){
   const nom2=MEM.nominal; let rem=nom; const previewAllocs=[];
   const tw=weekKey(tglDate);
   if(rem>=nom2&&!paid.includes(tw)){ previewAllocs.push({weekKey:tw,isCredit:false,isDebt:false,nominal:nom2}); rem-=nom2; }
-  for(const wk of debts){ if(rem<nom2)break; if(previewAllocs.find(a=>a.weekKey===wk))continue; previewAllocs.push({weekKey:wk,isCredit:false,isDebt:true,nominal:nom2}); rem-=nom2; }
+  for(const wk of debts){ if(previewAllocs.find(a=>a.weekKey===wk))continue; const wkNom=nominalForWeek(wk); if(rem<wkNom)break; previewAllocs.push({weekKey:wk,isCredit:false,isDebt:true,nominal:wkNom}); rem-=wkNom; }
   let fo=1; while(rem>=nom2&&nom2>0&&fo<10000){ const fd=new Date(tglDate); fd.setDate(fd.getDate()+(fo*7)); const fk=weekKey(fd); if(!paid.includes(fk)&&!previewAllocs.find(a=>a.weekKey===fk)){ previewAllocs.push({weekKey:fk,isCredit:false,isDebt:false,nominal:nom2}); rem-=nom2; } fo++; }
   if(rem>0) previewAllocs.push({weekKey:'KREDIT',nominal:rem,isCredit:true,isDebt:false});
   el.style.display='block';
@@ -2620,15 +2743,16 @@ function delTrx(id){
 }
 
 // ── WARGA ────────────────────────────────────────────────────
-let wfRT='RT 01', editWId=null;
+let wfRT='all', editWId=null;
 function pgWarga(){
   curPage='warga';
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('home')">← Beranda</button>
     <div class="ct">👥 Daftar Anggota</div>
-    <div class="fr">
-      <button class="fp ${wfRT==='RT 01'?'active':''}" onclick="wfRT='RT 01';buildWarga()">RT 01</button>
-      <button class="fp ${wfRT==='RT 02'?'active':''}" onclick="wfRT='RT 02';buildWarga()">RT 02</button>
+    <div class="fr" id="wFR">
+      <button class="fp ${wfRT==='all'?'active':''}" id="wAll" onclick="filterWarga('all')">Semua</button>
+      <button class="fp ${wfRT==='RT 01'?'active':''}" id="wRT1" onclick="filterWarga('RT 01')">RT 01</button>
+      <button class="fp ${wfRT==='RT 02'?'active':''}" id="wRT2" onclick="filterWarga('RT 02')">RT 02</button>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:10px">
       <input class="si" id="ws" style="margin:0;flex:1" placeholder="Cari nama..." oninput="buildWarga()">
@@ -2640,11 +2764,18 @@ function pgWarga(){
     <div class="cd"><div id="wl"></div></div>`;
   buildWarga();
 }
+function filterWarga(f){
+  wfRT=f;
+  document.querySelectorAll('#wFR .fp').forEach(b=>b.classList.remove('active'));
+  document.getElementById({all:'wAll','RT 01':'wRT1','RT 02':'wRT2'}[f]).classList.add('active');
+  buildWarga();
+}
 function buildWarga(){
   _debounce('buildWarga', ()=>{
   const q=(document.getElementById('ws')||{}).value?.toLowerCase()||'';
   const tw=thisWeek();
-  const list=MEM.warga.filter(w=>w.rt===wfRT&&(!q||w.name.toLowerCase().includes(q)));
+  const list=MEM.warga.filter(w=>(wfRT==='all'||w.rt===wfRT)&&(!q||w.name.toLowerCase().includes(q)))
+    .sort((a,b)=>a.name.localeCompare(b.name,'id'));
   const el=document.getElementById('wl'); if(!el)return;
   const canEdit=CU.role==='admin'||CU.role==='divisi';
   el.innerHTML=list.length===0?'<div class="empty">Tidak ditemukan</div>':
@@ -2663,7 +2794,9 @@ function buildWarga(){
           <span class="badge ${exStat?'bu':paid?'bp':dw>0?'bd':'bu'}">${exStat?'🚫 Dikecualikan':paid?'✓ Bayar':dw>0?'⚠️ Nunggak':'⏳ Belum'}</span>
           <div style="display:flex;gap:3px">
             <button class="bsm bsm-g" onclick="showQR('${w.id}')">QR</button>
-            ${canEdit?`<button class="bsm" onclick="_openWargaMenu('${w.id}')" title="Menu lainnya"
+            ${canEdit?`<button class="bsm" onclick="kirimWAAnggota('${w.id}')" title="Kirim WA"
+                style="background:#e7f9ee;color:#1fa855;border:none;border-radius:7px;padding:4px 10px;cursor:pointer;display:flex;align-items:center">${WA_ICON_SVG}</button>
+            <button class="bsm" onclick="_openWargaMenu('${w.id}')" title="Menu lainnya"
                 style="background:#f0f0f0;color:#555;border:none;border-radius:7px;padding:4px 12px;cursor:pointer;font-size:15px;font-weight:800;letter-spacing:1px;line-height:1">⋮</button>`:''}
           </div>
         </div>
@@ -2797,6 +2930,7 @@ function openEditW(id){
   editWId=id;
   document.getElementById('ew_name').value=w.name;
   document.getElementById('ew_rt').value=w.rt;
+  document.getElementById('ew_phone').value=w.phone||'';
   // Isi startDate jika ada, format ke YYYY-MM-DD
   const startEl=document.getElementById('ew_start');
   if(startEl) startEl.value=w.startDate||'';
@@ -2805,10 +2939,13 @@ function openEditW(id){
 function saveEditW(){
   const name=document.getElementById('ew_name').value.trim().toUpperCase();
   const rt=document.getElementById('ew_rt').value;
+  const phoneRaw=(document.getElementById('ew_phone')||{}).value||'';
   const startVal=(document.getElementById('ew_start')||{}).value||'';
   if(!name){showToast('❌ Nama kosong');return;}
   const i=MEM.warga.findIndex(x=>x.id===editWId); if(i===-1)return;
   MEM.warga[i].name=name; MEM.warga[i].rt=rt;
+  if(phoneRaw.trim()) MEM.warga[i].phone=phoneRaw.trim();
+  else delete MEM.warga[i].phone;
   if(startVal) MEM.warga[i].startDate=startVal;
   else delete MEM.warga[i].startDate;
   const ui=MEM.users.findIndex(u=>u.wargaId===editWId);
@@ -2916,7 +3053,7 @@ function doManualTrx(){
     // terlama→termuda), dan kalau masih sisa lagi jadi kredit. Konsisten dengan
     // mode Iuran Normal yang sudah lebih dulu pakai alokasi otomatis.
     const wkKey=weekKey(tglDate);
-    const nom2=MEM.nominal;
+    const nom2=nominalForWeek(wkKey); // tarif sesuai minggu yang dipilih (histori tarif)
     let rem=nom;
     let idx=0;
     // 1. Minggu yang dipilih di form (boleh kurang dari 1x nominal, sesuai input asli)
@@ -2928,18 +3065,20 @@ function doManualTrx(){
       isCredit:false, isDebt:true, isOffline:!isOnline
     });
     rem-=firstAmt;
-    // 2. Sisa (>= 1x nominal) dialokasikan ke tunggakan lain
-    if(rem>=nom2){
+    // 2. Sisa dialokasikan ke tunggakan lain, tiap minggu sesuai tarif yang
+    // berlaku saat minggu itu (histori tarif)
+    if(rem>0){
       const otherDebts=debtWeeks(wid).filter(wk=>wk!==wkKey);
       for(const wk of _debtPayOrder(otherDebts)){
-        if(rem<nom2) break;
+        const wkNom=nominalForWeek(wk);
+        if(rem<wkNom) break;
         newTrx.push({
           id:'T'+_ts4+'_'+(idx++)+'_'+Math.random().toString(36).substr(2,6),
-          wargaId:wid, userId:CU.id, nominal:nom2,
+          wargaId:wid, userId:CU.id, nominal:wkNom,
           date:now, weekKey:wk,
           isCredit:false, isDebt:true, isOffline:!isOnline
         });
-        rem-=nom2;
+        rem-=wkNom;
       }
     }
     // 3. Sisa terakhir (tidak cukup 1x nominal / tidak ada tunggakan lagi) jadi kredit
@@ -3006,11 +3145,13 @@ function allocatePaymentForDate(wid, amount, refDate){
   }
 
   // 2. Bayar tunggakan (paling baru telat dulu, sisanya terlama→termuda)
+  // Tiap minggu tunggakan dibayar sesuai tarif yang berlaku saat minggu itu (histori tarif)
   for(const wk of _debtPayOrder(debts)){
-    if(rem<nom) break;
     if(allocs.find(a=>a.weekKey===wk)) continue;
-    allocs.push({weekKey:wk,nominal:nom,isCredit:false,isDebt:true});
-    rem-=nom;
+    const wkNom=nominalForWeek(wk);
+    if(rem<wkNom) break;
+    allocs.push({weekKey:wk,nominal:wkNom,isCredit:false,isDebt:true});
+    rem-=wkNom;
   }
 
   // 3. Isi minggu depan (pre-bayar) — TANPA BATAS (lihat catatan di allocatePayment)
@@ -3164,9 +3305,16 @@ function pgAdmin(){
     </div>
     <div class="cd">
       <div class="sec">Nominal Iuran</div>
-      <div style="display:flex;gap:8px">
-        <input id="nomIn" class="si" style="margin:0;flex:1" type="number" value="${MEM.nominal}">
-        <button style="padding:10px 16px;background:var(--g);color:#fff;border:none;border-radius:var(--rs);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;cursor:pointer" onclick="updNominal()">Simpan</button>
+      <div style="font-size:12px;color:var(--tl);margin-bottom:8px">Tarif berlaku otomatis sesuai tanggal. Tunggakan minggu-minggu lama tetap dihitung pakai tarif yang berlaku waktu itu — tidak ikut berubah kalau kamu tambah tarif baru.</div>
+      <div style="font-size:13px;margin-bottom:10px">Tarif berlaku hari ini: <b style="color:var(--g)">${rpFmt(nominalOnDate(new Date()))}</b></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input id="nomIn" class="si" style="margin:0;flex:1;min-width:110px" type="number" placeholder="Nominal baru (Rp)">
+        <input id="nomDate" class="si" style="margin:0;flex:1;min-width:140px" type="date">
+      </div>
+      <button style="width:100%;margin-top:8px;padding:10px 16px;background:var(--g);color:#fff;border:none;border-radius:var(--rs);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;cursor:pointer" onclick="updNominal()">+ Tambah Tarif Baru</button>
+      <div style="margin-top:12px">
+        <div style="font-size:11px;font-weight:700;color:var(--tm);text-transform:uppercase;margin-bottom:4px">Riwayat Tarif</div>
+        <div id="nomHistList">${renderNomHist()}</div>
       </div>
     </div>
     <div class="cd">
@@ -3180,6 +3328,25 @@ function pgAdmin(){
       ${offQ.length>0?`<button style="margin-top:8px;padding:9px 16px;background:var(--gold);color:#fff;border:none;border-radius:var(--rs);font-family:'Plus Jakarta Sans',sans-serif;font-weight:700;cursor:pointer;font-size:13px" onclick="trySyncQ()">📤 Sync Sekarang</button>`:''}
     </div>
     `;
+}
+function renderNomHist(){
+  const hist=nominalHistorySorted().slice().reverse(); // terbaru di atas
+  const now=new Date();
+  return hist.map(h=>{
+    const d=new Date(h.from+'T00:00:00');
+    const isFuture=d>now;
+    const tgl=d.toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--b);font-size:12px">
+      <div><b>${rpFmt(h.amount)}</b> <span style="color:var(--tl)">mulai ${tgl}</span> ${isFuture?'<span style="color:var(--gold);font-weight:700"> · ⏳ akan datang</span>':''}</div>
+      ${hist.length>1?`<button onclick="hapusTarif('${h.from}')" style="background:none;border:none;color:#c0392b;cursor:pointer;font-size:11px;font-weight:700">Hapus</button>`:''}
+    </div>`;
+  }).join('');
+}
+function hapusTarif(from){
+  if(!confirm('Hapus tarif ini dari riwayat?'))return;
+  MEM.nominalHistory=(MEM.nominalHistory||[]).filter(h=>h.from!==from);
+  if(!MEM.nominalHistory.length) MEM.nominalHistory=[{from:'2000-01-01',amount:2000}];
+  _syncNominal(); saveMEM(); showToast('🗑️ Tarif dihapus'); pgAdmin();
 }
 function addWarga(){
   const name=document.getElementById('nw_n').value.trim().toUpperCase();
@@ -3195,8 +3362,18 @@ function addWarga(){
 
 function updNominal(){
   const n=parseInt(document.getElementById('nomIn').value);
-  if(isNaN(n)||n<0){showToast('❌ Tidak valid');return;}
-  MEM.nominal=n; saveMEM(); showToast('✅ Nominal: '+rpFmt(n));
+  const tglVal=document.getElementById('nomDate').value;
+  if(isNaN(n)||n<=0){showToast('❌ Nominal tidak valid');return;}
+  if(!tglVal){showToast('❌ Pilih tanggal mulai berlaku');return;}
+  if(!Array.isArray(MEM.nominalHistory)) MEM.nominalHistory=[];
+  const i=MEM.nominalHistory.findIndex(h=>h.from===tglVal);
+  if(i!==-1) MEM.nominalHistory[i].amount=n; // tanggal sama → update, bukan duplikat
+  else MEM.nominalHistory.push({from:tglVal,amount:n});
+  _syncNominal();
+  saveMEM();
+  const tglLabel=new Date(tglVal+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
+  showToast('✅ Tarif '+rpFmt(n)+' berlaku mulai '+tglLabel);
+  pgAdmin();
 }
 function openEditUser(id){
   editUserId=id;
@@ -4980,8 +5157,8 @@ function _wwdBayarWeek(wid, wk){
       <div style="font-weight:700;font-size:15px;color:var(--g);margin-bottom:4px">💳 Bayar Tunggakan</div>
       <div style="font-size:12px;color:var(--tl);margin-bottom:14px">${w.name} · ${weekLabel(wk)}</div>
       <div style="display:flex;gap:8px;margin-bottom:14px">
-        <button onclick="_wwdDoBayar('${wid}','${wk}',${1})" style="flex:1;padding:10px;background:var(--gp);color:var(--g);border:1.5px solid var(--gm);border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">1× ${rpFmt(MEM.nominal)}</button>
-        <button onclick="_wwdDoBayar('${wid}','${wk}',${2})" style="flex:1;padding:10px;background:var(--gp);color:var(--g);border:1.5px solid var(--gm);border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">2× ${rpFmt(MEM.nominal*2)}</button>
+        <button onclick="_wwdDoBayar('${wid}','${wk}',${1})" style="flex:1;padding:10px;background:var(--gp);color:var(--g);border:1.5px solid var(--gm);border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">1× ${rpFmt(nominalForWeek(wk))}</button>
+        <button onclick="_wwdDoBayar('${wid}','${wk}',${2})" style="flex:1;padding:10px;background:var(--gp);color:var(--g);border:1.5px solid var(--gm);border-radius:10px;font-size:13px;font-weight:700;cursor:pointer">2× ${rpFmt(nominalForWeek(wk)*2)}</button>
       </div>
       <button onclick="document.getElementById('_wwdBayarModal').remove()" style="width:100%;padding:9px;background:#f0f0f0;border:none;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;color:#666">Batal</button>
     </div>`;
@@ -4989,7 +5166,7 @@ function _wwdBayarWeek(wid, wk){
 }
 
 function _wwdDoBayar(wid, wk, multi){
-  const nom=MEM.nominal*multi;
+  const nom=nominalForWeek(wk)*multi;
   const now=new Date();
   const trx={
     id:'TW'+Date.now()+'_'+Math.random().toString(36).substr(2,5),
