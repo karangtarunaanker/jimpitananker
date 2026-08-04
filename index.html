@@ -1550,9 +1550,10 @@ function pgScan(){
       <!-- Tombol flash overlay -->
       <button id="flashBtn" onclick="toggleFlash()" style="display:none;position:absolute;bottom:12px;right:12px;background:rgba(0,0,0,0.55);border:none;border-radius:50%;width:44px;height:44px;font-size:22px;cursor:pointer;backdrop-filter:blur(4px)">🔦</button>
     </div>
-    <div style="text-align:center;font-size:12px;color:var(--tl);margin-bottom:12px" id="scanSt">
+    <div style="text-align:center;font-size:12px;color:var(--tl);margin-bottom:4px" id="scanSt">
       ${isOnline?'🟢 Online — arahkan ke QR':'🟡 Offline — transaksi disimpan lokal'}
     </div>
+    <div style="text-align:center;font-size:11px;color:var(--tl);margin-bottom:12px;opacity:.8" id="scanProg"></div>
     <div class="cd">
       <div class="sec">Cari manual</div>
       <input class="si" id="ss" placeholder="Ketik nama anggota..." oninput="srchScan()">
@@ -1562,8 +1563,12 @@ function pgScan(){
 }
 
 // camera
-let vStream=null, scanInt=null;
+let vStream=null, scanInt=null, videoReadyTO=null;
 let _flashOn=false;
+function setScanProg(msg){
+  const el=document.getElementById('scanProg');
+  if(el) el.innerHTML=msg||'';
+}
 function toggleFlash(){
   if(!vStream) return;
   const track=vStream.getVideoTracks()[0]; if(!track) return;
@@ -1575,11 +1580,12 @@ function toggleFlash(){
 }
 function startCam(){
   _flashOn=false;
+  setScanProg('⏳ Menyiapkan kamera...');
   navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}}})
     .then(s=>{
       vStream=s;
       const v=document.getElementById('sv'); if(!v)return;
-      v.srcObject=s; v.play();
+      v.srcObject=s; v.play().catch(()=>{});
       // Cek apakah perangkat mendukung flash/torch
       const track=s.getVideoTracks()[0];
       if(track){
@@ -1589,19 +1595,46 @@ function startCam(){
           if(btn) btn.style.display='block';
         }
       }
+      // ── Watchdog #1: video kadang tidak kunjung siap (videoWidth tetap 0) ──
+      // di sebagian HP/browser. Kalau dalam 7 detik belum ada frame sama sekali,
+      // tampilkan pesan jelas + tombol coba lagi, bukan diam tanpa keterangan.
+      // Watchdog ini otomatis dibatalkan begitu frame pertama berhasil dibaca
+      // (lihat videoIsReady() di bawah).
+      videoReadyTO=setTimeout(()=>{
+        if(!v.videoWidth){
+          setScanProg('');
+          const el=document.getElementById('scanSt');
+          if(el) el.innerHTML='⚠️ Kamera lambat merespons / tidak mengirim gambar. '
+            +'<button onclick="pgScan()" style="margin-left:6px;padding:4px 10px;border-radius:6px;border:none;background:var(--g);color:#fff;font-size:11px;cursor:pointer">Coba Lagi</button>';
+        }
+      },7000);
+      let videoWasReady=false;
+      const videoIsReady=()=>{
+        if(!videoWasReady && v.readyState>=2 && v.videoWidth>0){
+          videoWasReady=true;
+          if(videoReadyTO){clearTimeout(videoReadyTO);videoReadyTO=null;}
+        }
+        return videoWasReady || (v.readyState>=2 && v.videoWidth>0);
+      };
       // ── Deteksi QR: coba BarcodeDetector dulu (lebih cepat), fallback ke jsQR ──
       // Perbaikan (lihat riwayat diskusi): sebagian browser Android/iOS melaporkan
       // 'BarcodeDetector' ada di window, tapi sebenarnya TIDAK mendukung format
       // qr_code — sebelumnya ini membuat pembuatan BarcodeDetector atau proses
       // detect() error tanpa tertangkap, sehingga loop scan berhenti total tanpa
       // pesan apapun (kamera tetap terlihat menyala, tapi tidak pernah merespons).
-      // Sekarang: setiap kegagalan otomatis dialihkan ke jsQR.
+      // Sekarang: setiap kegagalan otomatis dialihkan ke jsQR. Selain itu ada
+      // watchdog #2 di bawah: kalau BarcodeDetector "diam" (selalu balik kosong,
+      // tanpa pernah error) selama beberapa detik padahal video sudah siap,
+      // itu juga otomatis dialihkan ke jsQR — karena sebagian HP Android
+      // melaporkan detect() sukses tapi tidak pernah benar2 menemukan QR.
       // PENTING: library jsQR sudah di-EMBED langsung di file ini (lihat tag
       // <script id="jsQR-embedded"> di <head>), jadi window.jsQR SELALU sudah
       // tersedia begitu file HTML ini terbuka — TIDAK butuh internet untuk fitur
       // scan (bisa dipakai offline penuh). CDN di bawah ini hanya cadangan darurat
       // kalau suatu saat blok embed itu terhapus/rusak saat file diedit manual.
+      let switchedToJsQR=false;
       const runJsQRLoop=()=>{
+        if(switchedToJsQR)return; switchedToJsQR=true;
         // Beberapa sumber CDN untuk jsQR — jika CDN pertama gagal/diblokir/lambat
         // (sering terjadi di jaringan tertentu, terutama di iPhone/Safari yang
         // tidak punya BarcodeDetector bawaan sehingga SELALU butuh jsQR ini),
@@ -1628,17 +1661,28 @@ function startCam(){
         };
         loadJSQR(()=>{
           const cv=document.getElementById('hc'),ctx=cv.getContext('2d',{willReadFrequently:true});
+          // Perbaikan performa: decode QR di ukuran yang diperkecil (maks ~640px
+          // lebar), bukan resolusi asli video (bisa 1280px+). Ini bikin proses
+          // decode jsQR jauh lebih cepat & tidak lag, terutama di HP lawas
+          // (Android low-end / iPhone lama), tanpa mengurangi akurasi baca QR.
+          const MAX_W=640;
           const scan=()=>{
             if(!vStream||!document.getElementById('sv'))return;
             if(v.readyState>=2&&v.videoWidth>0){
-              cv.width=v.videoWidth;cv.height=v.videoHeight;ctx.drawImage(v,0,0);
-              const img=ctx.getImageData(0,0,cv.width,cv.height);
+              videoIsReady();
+              const scale=Math.min(1,MAX_W/v.videoWidth);
+              const cw=Math.max(1,Math.round(v.videoWidth*scale));
+              const ch=Math.max(1,Math.round(v.videoHeight*scale));
+              cv.width=cw;cv.height=ch;ctx.drawImage(v,0,0,cw,ch);
+              const img=ctx.getImageData(0,0,cw,ch);
               const code=window.jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
               if(code){stopCam();procScan(code.data);return;}
+              setScanProg('🔍 Mencari QR...');
             }
             scanInt=setTimeout(scan,350);
           }; scan();
         }, ()=>{
+          setScanProg('');
           const el=document.getElementById('scanSt');
           if(el) el.innerHTML='❌ Gagal memuat pustaka scan dari semua sumber CDN (cek koneksi internet / WiFi ini mungkin memblokir cdnjs/jsdelivr/unpkg). '
             +'<button onclick="pgScan()" style="margin-left:6px;padding:4px 10px;border-radius:6px;border:none;background:var(--g);color:#fff;font-size:11px;cursor:pointer">Coba Lagi</button>';
@@ -1650,11 +1694,23 @@ function startCam(){
         try{
           const bd=new BarcodeDetector({formats:['qr_code']});
           useBarcodeDetector=true;
+          // Watchdog #2: hitung berapa kali detect() sukses dipanggil tapi tidak
+          // pernah menemukan QR *setelah* video benar2 sudah siap. Kalau sudah
+          // ~2.5 detik (≈8x percobaan @300ms) tanpa hasil sama sekali, kemungkinan
+          // besar BarcodeDetector di HP ini memang tidak benar2 berfungsi walau
+          // tidak melempar error — jadi paksa alih ke jsQR yang lebih konsisten.
+          let bdReadyAttempts=0;
+          const BD_MAX_ATTEMPTS=8;
           const det=async()=>{
             if(!vStream||!document.getElementById('sv'))return;
             try{
               const cs=await bd.detect(v);
               if(cs.length){stopCam();procScan(cs[0].rawValue);return;}
+              if(videoIsReady()){
+                bdReadyAttempts++;
+                setScanProg('🔍 Mencari QR...');
+                if(bdReadyAttempts>=BD_MAX_ATTEMPTS){ runJsQRLoop(); return; }
+              }
             }catch(e){
               // detect() error (bukan sekadar tidak ketemu QR) → browser ini
               // ternyata tidak benar2 dukung BarcodeDetector, pindah ke jsQR
@@ -1668,13 +1724,27 @@ function startCam(){
         }
       }
       if(!useBarcodeDetector) runJsQRLoop();
-    }).catch(()=>{
+    }).catch((err)=>{
+      setScanProg('');
       const el=document.getElementById('scanSt');
-      if(el) el.innerHTML='❌ Kamera tidak bisa diakses. <b>Buka via HTTPS</b> atau cari manual di bawah.';
+      let msg='❌ Kamera tidak bisa diakses. <b>Buka via HTTPS</b> atau cari manual di bawah.';
+      const nm=err&&err.name;
+      if(nm==='NotAllowedError'||nm==='PermissionDeniedError'){
+        msg='❌ Izin kamera ditolak. Aktifkan izin kamera untuk browser ini di pengaturan HP, lalu coba lagi.';
+      }else if(nm==='NotReadableError'||nm==='TrackStartError'){
+        msg='❌ Kamera sedang dipakai aplikasi lain. Tutup aplikasi lain yang memakai kamera, lalu coba lagi.';
+      }else if(nm==='NotFoundError'||nm==='DevicesNotFoundError'){
+        msg='❌ Kamera tidak ditemukan di perangkat ini.';
+      }else if(nm==='OverconstrainedError'||nm==='ConstraintNotSatisfiedError'){
+        msg='❌ Kamera perangkat ini tidak mendukung pengaturan yang diminta.';
+      }
+      if(el) el.innerHTML=msg+' <button onclick="pgScan()" style="margin-left:6px;padding:4px 10px;border-radius:6px;border:none;background:var(--g);color:#fff;font-size:11px;cursor:pointer">Coba Lagi</button>';
     });
 }
 function stopCam(){
   if(scanInt){clearTimeout(scanInt);clearInterval(scanInt);scanInt=null;}
+  if(videoReadyTO){clearTimeout(videoReadyTO);videoReadyTO=null;}
+  setScanProg('');
   if(vStream){vStream.getTracks().forEach(t=>t.stop());vStream=null;}
 }
 function procScan(raw){
