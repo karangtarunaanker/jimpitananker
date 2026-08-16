@@ -400,21 +400,24 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
     <div id="ex_namaInfo" style="font-size:13px;font-weight:700;color:var(--g);margin-bottom:12px"></div>
 
     <div class="fg">
-      <label>Status</label>
-      <select id="ex_tipe" class="fi" onchange="_exToggleTipe()" style="margin-top:5px">
-        <option value="startdate">📅 Atur Tanggal Mulai Dihitung</option>
+      <label>📅 Tanggal Mulai Dihitung</label>
+      <input id="ex_startdate" class="fi" type="date" style="margin-top:5px">
+      <div style="font-size:11px;color:var(--tl);margin-top:5px">
+        Tunggakan dihitung mulai tanggal ini. Kosongkan untuk ikut default (Desember 2024).
+      </div>
+    </div>
+
+    <div style="height:1px;background:var(--b);margin:16px 0"></div>
+
+    <div class="fg">
+      <label>Status Pengecualian</label>
+      <select id="ex_status" class="fi" onchange="_exToggleStatus()" style="margin-top:5px">
+        <option value="none">✅ Tidak Dikecualikan</option>
         <option value="permanent">🚫 Dikecualikan Permanen</option>
         <option value="temp">⏳ Dikecualikan Sementara</option>
       </select>
-    </div>
-
-    <div id="ex_startdate_div" style="margin-top:12px">
-      <div class="fg">
-        <label>Mulai Dihitung Sejak</label>
-        <input id="ex_startdate" class="fi" type="date" style="margin-top:5px">
-      </div>
       <div style="font-size:11px;color:var(--tl);margin-top:5px">
-        Tunggakan dihitung mulai tanggal ini. Kosongkan untuk ikut default (Desember 2024).
+        Permanen = tunggakan tidak pernah dihitung. Sementara = tunggakan dibekukan hanya selama rentang tanggal di bawah, di luar rentang tetap dihitung normal.
       </div>
     </div>
 
@@ -485,6 +488,7 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
         <option value="admin">Admin</option>
         <option value="divisi">Divisi</option>
         <option value="petugas">Petugas</option>
+        <option value="panitia">Panitia</option>
         <option value="anggota">Anggota</option>
       </select></div>
     <div class="fg" style="margin-top:10px"><label>Password Baru</label><input id="eu_pass" class="fi" type="text" placeholder="Kosongkan jika tidak diubah" autocomplete="new-password"></div>
@@ -1126,11 +1130,27 @@ function isWeekClosed(weekK){
 }
 
 function paidWeeks(wid){ return MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).map(t=>t.weekKey); }
+// Cek apakah 1 minggu (weekKey) tertentu dikecualikan dari tunggakan warga w.
+// - Permanen: SEMUA minggu dikecualikan (tidak berubah, sesuai perilaku lama).
+// - Sementara: HANYA minggu yang jatuh di dalam rentang exemptFrom–exemptUntil
+//   yang dikecualikan. Minggu sebelum/sesudah rentang tetap dihitung tunggakan normal.
+function _isWeekExempt(w,wk){
+  if(!w) return false;
+  if(w.exemptPermanent) return true;
+  if(w.exemptFrom&&w.exemptUntil){
+    const sun=_sundayOfWeekKey(wk);
+    if(!sun) return false;
+    const dari=new Date(w.exemptFrom+'T00:00:00');
+    const sampai=new Date(w.exemptUntil+'T23:59:59');
+    return sun>=dari&&sun<=sampai;
+  }
+  return false;
+}
 function debtWeeks(wid){
   const w=MEM.warga.find(x=>x.id===wid);
-  if(isExempt(w)) return []; // dikecualikan → tidak ada tunggakan
+  if(w&&w.exemptPermanent) return []; // dikecualikan permanen → tidak ada tunggakan sama sekali
   const p=paidWeeks(wid);
-  return expectedWeeks(wid).filter(k=>!p.includes(k));
+  return expectedWeeks(wid).filter(k=>!p.includes(k)&&!_isWeekExempt(w,k));
 }
 // Urutan bayar tunggakan: minggu yang PALING BARU telat dibayar duluan,
 // sisanya tetap diproses dari yang paling lama → makin baru (urutan asli).
@@ -3085,21 +3105,37 @@ function _openWargaMenu(wid){
       </div>
       <div style="padding:8px">
         <button onclick="document.getElementById('_wMenuModal').remove();showWargaWeekDetail('${wid}')"
-          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--t);cursor:pointer;display:flex;align-items:center;gap:12px">
-          <span style="font-size:18px">📖</span><span>Detail per Minggu</span>
+          style="width:100%;text-align:left;padding:11px 12px;background:none;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px;flex-shrink:0">📖</span>
+          <span style="min-width:0">
+            <span style="display:block;font-size:14px;color:var(--t)">Detail per Minggu</span>
+            <span style="display:block;font-size:11px;color:var(--tl);margin-top:1px">Lihat status bayar tiap minggu anggota ini</span>
+          </span>
         </button>
         <button onclick="document.getElementById('_wMenuModal').remove();openExempt('${wid}')"
-          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--t);cursor:pointer;display:flex;align-items:center;gap:12px">
-          <span style="font-size:18px">${exIcon}</span><span>${exLabel}</span>
+          style="width:100%;text-align:left;padding:11px 12px;background:none;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px;flex-shrink:0">${exIcon}</span>
+          <span style="min-width:0">
+            <span style="display:block;font-size:14px;color:var(--t)">${exLabel}</span>
+            <span style="display:block;font-size:11px;color:var(--tl);margin-top:1px">Atur tanggal mulai dihitung atau bebaskan dari tunggakan</span>
+          </span>
         </button>
         <button onclick="document.getElementById('_wMenuModal').remove();openEditW('${wid}')"
-          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--t);cursor:pointer;display:flex;align-items:center;gap:12px">
-          <span style="font-size:18px">✏️</span><span>Edit Data</span>
+          style="width:100%;text-align:left;padding:11px 12px;background:none;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px;flex-shrink:0">✏️</span>
+          <span style="min-width:0">
+            <span style="display:block;font-size:14px;color:var(--t)">Edit Data</span>
+            <span style="display:block;font-size:11px;color:var(--tl);margin-top:1px">Ubah nama, RT, atau nomor WhatsApp</span>
+          </span>
         </button>
         <div style="height:1px;background:var(--b);margin:4px 12px"></div>
         <button onclick="document.getElementById('_wMenuModal').remove();delWarga('${wid}')"
-          style="width:100%;text-align:left;padding:13px 12px;background:none;border:none;border-radius:10px;font-size:14px;color:var(--red);cursor:pointer;display:flex;align-items:center;gap:12px">
-          <span style="font-size:18px">🗑️</span><span>Hapus Anggota</span>
+          style="width:100%;text-align:left;padding:11px 12px;background:none;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:12px">
+          <span style="font-size:18px;flex-shrink:0">🗑️</span>
+          <span style="min-width:0">
+            <span style="display:block;font-size:14px;color:var(--red)">Hapus Anggota</span>
+            <span style="display:block;font-size:11px;color:var(--tl);margin-top:1px">Hapus data anggota secara permanen</span>
+          </span>
         </button>
       </div>
     </div>`;
@@ -3128,56 +3164,57 @@ function openExempt(id){
   _exemptWId=id;
   document.getElementById('ex_namaInfo').textContent='👤 '+w.name+' — '+w.rt;
 
-  // Set tipe saat ini
-  const tipeEl=document.getElementById('ex_tipe');
-  if(w.exemptPermanent){ tipeEl.value='permanent'; }
-  else if(w.exemptFrom&&w.exemptUntil){ tipeEl.value='temp'; }
-  else { tipeEl.value='startdate'; }
-
-  // Isi field
+  // Section 1: tanggal mulai (independen)
   document.getElementById('ex_startdate').value=w.startDate||'';
+
+  // Section 2: status pengecualian
+  const statusEl=document.getElementById('ex_status');
+  if(w.exemptPermanent){ statusEl.value='permanent'; }
+  else if(w.exemptFrom&&w.exemptUntil){ statusEl.value='temp'; }
+  else { statusEl.value='none'; }
   document.getElementById('ex_dari').value=w.exemptFrom||'';
   document.getElementById('ex_sampai').value=w.exemptUntil||'';
 
-  _exToggleTipe();
+  _exToggleStatus();
   openModal('moExempt');
 }
 
-function _exToggleTipe(){
-  const tipe=document.getElementById('ex_tipe').value;
-  document.getElementById('ex_startdate_div').style.display=tipe==='startdate'?'block':'none';
-  document.getElementById('ex_rentang').style.display=tipe==='temp'?'block':'none';
+function _exToggleStatus(){
+  const status=document.getElementById('ex_status').value;
+  document.getElementById('ex_rentang').style.display=status==='temp'?'block':'none';
 }
 
+// Simpan KEDUA section sekaligus: tanggal mulai & status pengecualian independen satu sama lain.
 function saveExempt(){
-  const tipe=document.getElementById('ex_tipe').value;
   const i=MEM.warga.findIndex(x=>x.id===_exemptWId); if(i===-1)return;
+  const status=document.getElementById('ex_status').value;
 
-  // Reset semua field exempt & startDate
+  // Validasi dulu sebelum nulis apapun, biar gak nyimpen setengah-setengah
+  let dari,sampai;
+  if(status==='temp'){
+    dari=document.getElementById('ex_dari').value;
+    sampai=document.getElementById('ex_sampai').value;
+    if(!dari||!sampai){showToast('❌ Isi tanggal dari dan sampai');return;}
+    if(new Date(dari)>new Date(sampai)){showToast('❌ Tanggal dari harus sebelum sampai');return;}
+  }
+
+  // Section 1: Tanggal Mulai Dihitung
+  const sd=document.getElementById('ex_startdate').value;
+  if(sd) MEM.warga[i].startDate=sd; else delete MEM.warga[i].startDate;
+
+  // Section 2: Status Pengecualian
   delete MEM.warga[i].exemptPermanent;
   delete MEM.warga[i].exemptFrom;
   delete MEM.warga[i].exemptUntil;
-  // startDate tetap disimpan meski ganti ke exempt, hanya diupdate jika tipe=startdate
-
-  if(tipe==='permanent'){
+  if(status==='permanent'){
     MEM.warga[i].exemptPermanent=true;
-    showToast('🚫 '+MEM.warga[i].name+' dikecualikan permanen');
-  } else if(tipe==='temp'){
-    const dari=document.getElementById('ex_dari').value;
-    const sampai=document.getElementById('ex_sampai').value;
-    if(!dari||!sampai){showToast('❌ Isi tanggal dari dan sampai');return;}
-    if(new Date(dari)>new Date(sampai)){showToast('❌ Tanggal dari harus sebelum sampai');return;}
+  } else if(status==='temp'){
     MEM.warga[i].exemptFrom=dari;
     MEM.warga[i].exemptUntil=sampai;
-    showToast('⏳ Dikecualikan sementara s/d '+sampai);
-  } else {
-    // tipe === 'startdate'
-    const sd=document.getElementById('ex_startdate').value;
-    if(sd){ MEM.warga[i].startDate=sd; showToast('📅 Mulai dihitung sejak '+sd); }
-    else { delete MEM.warga[i].startDate; showToast('📅 Mulai dihitung sejak default (Des 2024)'); }
   }
 
   saveMEM();
+  showToast('✅ Pengaturan tunggakan '+MEM.warga[i].name+' disimpan');
   closeModal('moExempt');
   buildWarga();
 }
