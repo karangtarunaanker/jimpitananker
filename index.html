@@ -2356,11 +2356,14 @@ function buildTunggakan(f){
         <div class="wn">${w.name} <span style="font-size:11px;color:var(--tl)">${w.rt}</span></div>
         <div class="ws">${rpFmt(w.dr)} · Terlama: ${weekLabel(w.dw[0])}</div>
       </div>
-      ${canEdit?`<div style="display:flex;gap:4px">
+      <div style="display:flex;gap:4px">
+        <button class="bsm" onclick="showWargaWeekDetail('${w.id}', true)"
+          style="background:#eef2ff;color:#4f46e5;border:none;border-radius:7px;padding:4px 10px;cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center" title="Lihat detail tunggakan per minggu">🔎</button>
+        ${canEdit?`
         <button class="bsm" onclick="kirimWATunggakan('${w.id}')"
           style="background:#e7f9ee;color:#1fa855;border:none;border-radius:7px;padding:4px 10px;cursor:pointer;font-size:11px;font-weight:700;display:flex;align-items:center;gap:4px;justify-content:center">${WA_ICON_SVG}</button>
-        <button class="bsm bsm-g" onclick="openBayarTunggakan('${w.id}')">Bayar</button>
-      </div>`:''}
+        <button class="bsm bsm-g" onclick="openBayarTunggakan('${w.id}')">Bayar</button>`:''}
+      </div>
     </div>`).join('');
   }, 250);
 }
@@ -3998,6 +4001,10 @@ function _renderKas(jenis){
   const judul = jenis==='umum'?'📒 Buku Kas Umum':'📗 Buku Kas Jimpitan';
   const k = _kasKey(jenis);
   if(!Array.isArray(MEM[k])) MEM[k]=[];
+  // Reset filter bulan ke "Semua" tiap kali masuk halaman dari menu (fresh),
+  // supaya tampilan awal selalu sama seperti sebelumnya (semua transaksi).
+  if(!window._kasBulanFilter) window._kasBulanFilter={};
+  window._kasBulanFilter[jenis]='all';
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('kas')">← Kas</button>
     <div class="ct">${judul}</div>
@@ -4039,12 +4046,44 @@ function _buildKasList(jenis){
   const el=document.getElementById('kasList'); if(!el)return;
   const k=_kasKey(jenis);
   if(!Array.isArray(MEM[k])) MEM[k]=[];
-  const rows=_hitungSaldo([...MEM[k]].sort((a,b)=>a.tgl.localeCompare(b.tgl)));
-  if(!rows.length){ el.innerHTML='<div class="empty"><div class="ei">📭</div>Belum ada data</div>'; return; }
+  // allRows = SEMUA transaksi (saldo dihitung berjalan dari data lengkap ini,
+  // supaya kolom Saldo tiap baris tetap akurat walau tabelnya lagi difilter per bulan)
+  const allRows=_hitungSaldo([...MEM[k]].sort((a,b)=>a.tgl.localeCompare(b.tgl)));
+  if(!allRows.length){ el.innerHTML='<div class="empty"><div class="ei">📭</div>Belum ada data</div>'; return; }
+
+  // Filter bulan: "Semua Transaksi" (default, sama seperti tampilan lama) atau 1 bulan tertentu
+  const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const bulanList=[...new Set(allRows.map(r=>r.tgl.slice(0,7)))].sort((a,b)=>b.localeCompare(a));
+  if(!window._kasBulanFilter) window._kasBulanFilter={};
+  if(window._kasBulanFilter[jenis]===undefined) window._kasBulanFilter[jenis]='all';
+  const filterVal=window._kasBulanFilter[jenis];
+
+  const filterHTML=`
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+      <label style="font-size:11px;font-weight:600;color:var(--tl);white-space:nowrap">📅 Filter</label>
+      <select class="fi" style="padding:5px 8px;font-size:12px;flex:1" onchange="_kasSetFilterBulan('${jenis}',this.value)">
+        <option value="all" ${filterVal==='all'?'selected':''}>Semua Transaksi</option>
+        ${bulanList.map(b=>{
+          const [y,m]=b.split('-').map(Number);
+          return `<option value="${b}" ${filterVal===b?'selected':''}>${mn[m-1]} ${y}</option>`;
+        }).join('')}
+      </select>
+    </div>`;
+
+  // rows = data yang ditampilkan di tabel (sudah kefilter), TAPI r.saldo tiap baris
+  // tetap saldo berjalan yang asli dari allRows, bukan dihitung ulang dari rows
+  // yang sudah dipotong — jadi kolom Saldo tetap benar meski lagi lihat bulan lama.
+  const rows=filterVal==='all'?allRows:allRows.filter(r=>r.tgl.slice(0,7)===filterVal);
+
+  if(!rows.length){
+    el.innerHTML=filterHTML+'<div class="empty"><div class="ei">📭</div>Tidak ada transaksi di bulan ini</div>';
+    return;
+  }
+
   const totMasuk=rows.reduce((s,r)=>s+(r.masuk||0),0);
   const totKeluar=rows.reduce((s,r)=>s+(r.keluar||0),0);
-  const saldoAkhir=totMasuk-totKeluar;
-  el.innerHTML=`
+  const saldoAkhir=rows[rows.length-1].saldo;
+  el.innerHTML=filterHTML+`
     <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
       <div style="flex:1;min-width:80px;padding:6px 10px;background:#e8f5e9;border-radius:8px;text-align:center">
         <div style="font-size:10px;color:var(--tl);font-weight:600">Masuk</div>
@@ -4075,14 +4114,27 @@ function _buildKasList(jenis){
     </table></div>`;
 }
 
+function _kasSetFilterBulan(jenis, val){
+  if(!window._kasBulanFilter) window._kasBulanFilter={};
+  window._kasBulanFilter[jenis]=val;
+  _buildKasList(jenis);
+}
+
 function _exportGambarKas(jenis){
   const k=_kasKey(jenis);
-  const rows=_hitungSaldo([...MEM[k]].sort((a,b)=>a.tgl.localeCompare(b.tgl)));
   const judul=jenis==='umum'?'📒 Buku Kas Umum':'📗 Buku Kas Jimpitan';
-  if(!rows.length){showToast('❌ Belum ada data kas');return;}
+  // Ikut filter bulan yang lagi aktif di layar (default 'all' = semua transaksi,
+  // sama seperti perilaku lama kalau belum pernah pilih filter apa pun).
+  if(!window._kasBulanFilter) window._kasBulanFilter={};
+  const filterVal=window._kasBulanFilter[jenis]||'all';
+  const allRows=_hitungSaldo([...MEM[k]].sort((a,b)=>a.tgl.localeCompare(b.tgl)));
+  const rows=filterVal==='all'?allRows:allRows.filter(r=>r.tgl.slice(0,7)===filterVal);
+  if(!rows.length){showToast(filterVal==='all'?'❌ Belum ada data kas':'❌ Tidak ada transaksi di bulan ini');return;}
   const totMasuk=rows.reduce((s,r)=>s+(r.masuk||0),0);
   const totKeluar=rows.reduce((s,r)=>s+(r.keluar||0),0);
-  const saldoAkhir=totMasuk-totKeluar;
+  // Saldo Akhir = saldo berjalan di baris terakhir yang ditampilkan (sudah termasuk
+  // saldo sejak awal, bukan cuma dari rows yang kefilter), konsisten dengan tampilan di app.
+  const saldoAkhir=rows[rows.length-1].saldo;
   const rowsHTML=rows.map((r,i)=>`<tr style="${i%2?'background:#f7fbf8':''}">
     ${_notaTd(new Date(r.tgl+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'2-digit'}))}
     ${_notaTd(r.ket)}
@@ -4096,11 +4148,22 @@ function _exportGambarKas(jenis){
       {label:'Keluar',value:rpFmt(totKeluar),bg:'#fff0f0',bd:'#f5c6c2',tc:'#a05040',vc:'#c0392b'},
       {label:'Saldo Akhir',value:rpFmt(saldoAkhir),bg:'#fffbe6',bd:'#f0c96e',tc:'#8a6200',vc:'#8a6200'}
     ])}
-    <table style="width:100%;border-collapse:collapse">
+    <table style="border-collapse:collapse">
       <tr>${_notaTh('Tanggal')}${_notaTh('Keterangan')}${_notaTh('Masuk',true)}${_notaTh('Keluar',true)}${_notaTh('Saldo',true)}</tr>
       ${rowsHTML}
     </table>`;
-  const node=_notaWrap(judul, `Dicetak: ${new Date().toLocaleDateString('id-ID')}`, inner, 560);
+  const mn=['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+  const subJudul=filterVal==='all'
+    ? `Semua Transaksi · Dicetak: ${new Date().toLocaleDateString('id-ID')}`
+    : `${mn[parseInt(filterVal.split('-')[1],10)-1]} ${filterVal.split('-')[0]} · Dicetak: ${new Date().toLocaleDateString('id-ID')}`;
+  const node=_notaWrap(judul, subJudul, inner, 560);
+  // PERBAIKAN: lebar tetap 560px bisa bikin kepotong di sisi kanan (kolom Saldo)
+  // kalau teks Keterangan panjang, soalnya semua sel pakai white-space:nowrap
+  // sehingga lebar tabel aslinya bisa lebih dari 560px. Solusinya: lepas lebar
+  // tetapnya dan biarkan wrapper melebar mengikuti lebar asli tabel (shrink-to-fit),
+  // jadi gambar hasil export selalu utuh, seberapa pun panjang teks Keterangannya.
+  node.style.width='auto';
+  node.style.maxWidth='none';
   _notaSnapshot(node, `${judul.replace(/[^\w]+/g,'-')}-${Date.now()}.png`);
 }
 
@@ -4339,10 +4402,16 @@ function _buildRekapJimpitan(){
     return parts.length===3&&parseInt(parts[0])===y&&parseInt(parts[2])===m;
   }).map(t=>t.weekKey))].sort();
   // Juga ambil dari rekapEdit jika ada weekKey yang dicatat admin tapi belum ada transaksi
+  // PERBAIKAN BUG: key rekapEdit per-RT formatnya "YYYY-WN-M_RT01"/"_RT02". Kalau key ini
+  // dipakai APA ADANYA (tanpa buang suffix _RT01/_RT02), parts[2] ("7_RT01") tetap lolos
+  // parseInt jadi 7 → dianggap weekKey VALID TERSENDIRI, sehingga bikin kartu minggu
+  // duplikat (minggu yang sama muncul 2x) begitu admin edit nominal per RT.
+  // Solusinya: buang dulu suffix RT-nya, baru divalidasi & dimasukkan sebagai base weekKey.
   Object.keys(MEM.rekapEdit||{}).forEach(k=>{
-    const parts=k.split('-');
-    if(parts.length===3&&parseInt(parts[0])===y&&parseInt(parts[2])===m&&!allWeekKeys.includes(k))
-      allWeekKeys.push(k);
+    const base=k.replace(/_RT0?[12]$/,'');
+    const parts=base.split('-');
+    if(parts.length===3&&/^W\d+$/.test(parts[1])&&parseInt(parts[0])===y&&parseInt(parts[2])===m&&!allWeekKeys.includes(base))
+      allWeekKeys.push(base);
   });
   // PERBAIKAN: Karena Pemasukan/Tunggakan/Kredit sekarang dihitung dari TANGGAL ASLI
   // transaksi (bukan label weekKey), pastikan kartu minggu tetap muncul untuk minggu
@@ -4431,9 +4500,22 @@ function _buildRekapJimpitan(){
     // langsung disatukan ke iuranTrx supaya kehitung sesuai RT warganya.
     const pemasukanTrx=iuranTrx.concat(tunggakanTrx).concat(kreditTrx);
 
-    // Edit override dari admin
-    const ek=MEM.rekapEdit[wk.key]||{};
-    const iuranFinal   = ek.iuran    !== undefined ? ek.iuran    : _realCashSum(pemasukanTrx);
+    // Hitung nominal final tiap RT (pakai hasil edit admin kalau ada) DULU,
+    // baru Total Pemasukan/Total Minggu diambil dari JUMLAH kedua RT ini.
+    // PERBAIKAN: sebelumnya Total ambil dari rekapEdit[wk.key] (key tanpa
+    // embel-embel RT) yang tidak pernah disentuh saat admin edit nominal per
+    // RT (yang disimpan di rekapEdit[wk.key+'_RT01'/'_RT02']) — akibatnya
+    // Total tidak pernah ikut berubah walau angka RT sudah diedit.
+    const rts=['RT 01','RT 02'];
+    const rtData=rts.map(rt=>{
+      const wargaRt=MEM.warga.filter(w=>w.rt===rt).map(w=>w.id);
+      const iuranRtTrx=pemasukanTrx.filter(t=>wargaRt.includes(t.wargaId));
+      const iuranRtRp=_realCashSum(iuranRtTrx);
+      const ekRt=MEM.rekapEdit[wk.key+'_'+rt.replace(' ','')]||{};
+      const iuranRtFinal=ekRt.iuran!==undefined?ekRt.iuran:iuranRtRp;
+      return {rt, iuranRtFinal};
+    });
+    const iuranFinal = rtData.reduce((s,r)=>s+r.iuranRtFinal,0);
     const total=iuranFinal;
     totalBulan+=total;
 
@@ -4458,14 +4540,7 @@ function _buildRekapJimpitan(){
 
       <div style="padding:6px 0;border-bottom:1px solid var(--b)">
         <div style="font-size:11px;color:var(--tm);font-weight:600;margin-bottom:6px">Pemasukan Jimpitan</div>
-        ${(()=>{
-          const rts=['RT 01','RT 02'];
-          return rts.map(rt=>{
-            const wargaRt=MEM.warga.filter(w=>w.rt===rt).map(w=>w.id);
-            const iuranRtTrx=pemasukanTrx.filter(t=>wargaRt.includes(t.wargaId));
-            const iuranRtRp=_realCashSum(iuranRtTrx);
-            const ekRt=MEM.rekapEdit[wk.key+'_'+rt.replace(' ','')]||{};
-            const iuranRtFinal=ekRt.iuran!==undefined?ekRt.iuran:iuranRtRp;
+        ${rtData.map(({rt,iuranRtFinal})=>{
             return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0 3px 10px">
               <div style="font-size:11px;color:var(--tl)">${rt}</div>
               <div>
@@ -4480,8 +4555,7 @@ function _buildRekapJimpitan(){
           }).join('')+`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0 0 0;margin-top:4px;border-top:1px dashed var(--b)">
             <div style="font-size:11px;color:var(--tm);font-weight:700">Total Pemasukan</div>
             <span style="font-weight:700;color:var(--g);font-size:13px;font-family:'JetBrains Mono',monospace">${rpFmt(iuranFinal)}</span>
-          </div>`;
-        })()}
+          </div>`}
       </div>
 
       <div style="border-top:1px solid #e0e0e0;margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:center">
@@ -5845,47 +5919,56 @@ function _hpEksekusi(){
 // ════════════════════════════════════════════════════════════
 // WARGA — DETAIL TRANSAKSI PER MINGGU (ADMIN/DIVISI)
 // ════════════════════════════════════════════════════════════
-function showWargaWeekDetail(wid){
-  if(CU.role!=='admin'&&CU.role!=='divisi')return;
+function showWargaWeekDetail(wid, readOnly){
+  if(!readOnly && CU.role!=='admin'&&CU.role!=='divisi')return;
   const w=MEM.warga.find(x=>x.id===wid); if(!w)return;
   const existing=document.getElementById('_wwdModal');
   if(existing) existing.remove();
-  _renderWWD(wid);
+  _renderWWD(wid, readOnly);
 }
 
-function _renderWWD(wid){
+function _renderWWD(wid, readOnly){
   const w=MEM.warga.find(x=>x.id===wid); if(!w)return;
-  const weekSet=new Set();
-  MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).forEach(t=>{ if(t.weekKey) weekSet.add(t.weekKey); });
-  debtWeeks(wid).forEach(k=>weekSet.add(k));
-  const weeks=[...weekSet].sort((a,b)=>b.localeCompare(a));
-  const tot=MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
   const debtList=debtWeeks(wid);
-  const lunas=weeks.filter(k=>MEM.transaksi.some(t=>t.wargaId===wid&&t.weekKey===k&&!t.isCredit)).length;
+  const tot=MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).reduce((s,t)=>s+t.nominal,0);
+  const lunas=new Set(MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).map(t=>t.weekKey)).size;
   const tunggak=debtList.length;
 
+  // Saat readOnly (dibuka dari menu Tunggakan), cukup tampilkan minggu yang telat saja.
+  // Saat mode kelola (bukan readOnly), tampilkan semua minggu (lunas + tunggak).
+  const weekSet=new Set();
+  if(!readOnly){
+    MEM.transaksi.filter(t=>t.wargaId===wid&&!t.isCredit).forEach(t=>{ if(t.weekKey) weekSet.add(t.weekKey); });
+  }
+  debtList.forEach(k=>weekSet.add(k));
+  // Urut kronologis beneran (tanggal Minggu dari weekKey), bukan sort string,
+  // supaya lintas bulan/tahun (mis. Okt-Nov-Des) tetap urut.
+  const weeks=[...weekSet].sort((a,b)=>_sundayOfWeekKey(b)-_sundayOfWeekKey(a));
+
   const rowsHTML=weeks.length===0
-    ?'<div style="text-align:center;padding:24px;color:var(--tl);font-size:13px">📭 Belum ada riwayat</div>'
+    ?`<div style="text-align:center;padding:24px;color:var(--tl);font-size:13px">${readOnly?'✅ Tidak ada tunggakan':'📭 Belum ada riwayat'}</div>`
     :weeks.map(k=>{
       const trxList=MEM.transaksi.filter(t=>t.wargaId===wid&&t.weekKey===k&&!t.isCredit);
       const isDebt=debtList.includes(k);
       const bayar=trxList.length>0;
       const totalNom=trxList.reduce((s,t)=>s+t.nominal,0);
+      const nomTampil=bayar?totalNom:nominalForWeek(k);
       const u=trxList.length>0?MEM.users.find(x=>x.id===trxList[0].userId):null;
       const tgl=trxList.length>0?new Date(trxList[0].date).toLocaleDateString('id-ID',{day:'2-digit',month:'short'}):null;
-      return`<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--b);background:${bayar?'':'isDebt'===String(isDebt)?'':''}">
+      return`<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--b)">
         <div style="width:6px;height:6px;border-radius:50%;background:${bayar?'var(--gl)':isDebt?'var(--red)':'#ccc'};flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
           <span style="font-size:12px;font-weight:700;color:var(--t)">${weekLabel(k)}</span>
           ${tgl?`<span style="font-size:11px;color:var(--tl);margin-left:6px">${u?.name||''} · ${tgl}</span>`:''}
+          ${!bayar&&isDebt?'<span style="font-size:10px;color:var(--red);margin-left:6px;font-weight:700">⚠️ Tunggak</span>':''}
         </div>
         <div style="font-size:11px;font-weight:700;color:${bayar?'var(--g)':isDebt?'var(--red)':'var(--tl)'};white-space:nowrap;margin-right:4px">
-          ${bayar?rpFmt(totalNom):isDebt?'Tunggak':'—'}
+          ${bayar||isDebt?rpFmt(nomTampil):'—'}
         </div>
-        ${bayar
+        ${readOnly?'':(bayar
           ?`<button onclick="_wwdHapusWeek('${wid}','${k}')" style="padding:3px 7px;background:var(--rl);color:var(--red);border:none;border-radius:6px;cursor:pointer;font-size:12px">🗑️</button>`
           :isDebt?`<button onclick="_wwdBayarWeek('${wid}','${k}')" style="padding:3px 8px;background:var(--gp);color:var(--g);border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700">Bayar</button>`
-          :'<div style="width:38px"></div>'
+          :'<div style="width:38px"></div>')
         }
       </div>`;
     }).join('');
