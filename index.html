@@ -624,24 +624,51 @@ function _normMEM(){
   _syncNominal();
 }
 
-function saveMEM(){
-  if(isOnline){
-    const updates = {
-      'jmpData/users':       MEM.users,
-      'jmpData/warga':       MEM.warga,
-      'jmpData/nominal':     MEM.nominal,
-      'jmpData/nominalHistory': MEM.nominalHistory||[],
-      'jmpData/seeded':      MEM.seeded,
-      'jmpData/kasUmum':     MEM.kasUmum||[],
-      'jmpData/kasJimpitan': MEM.kasJimpitan||[],
-      'jmpData/absen':       MEM.absen||[],
-      'jmpData/daftarKelompok': MEM.daftarKelompok||[],
-      'jmpData/kegiatan':        MEM.kegiatan||[]
-    };
-    _db.ref().update(updates)
-      .then(()=>{ const el=document.getElementById('cstat'); if(el) el.innerHTML='<span class="cdot on"></span>'; })
-      .catch(e=>console.warn('Firebase save error',e));
-  }
+// ── Peta field MEM → path Firebase + cara ambil nilainya ──────────────────
+// Dipakai saveMEM(fields) supaya tiap pemanggilan cuma kirim bagian yang
+// benar-benar berubah, bukan seluruh data (lihat catatan di saveMEM()).
+const MEM_FIELD_PATH = {
+  users:          'jmpData/users',
+  warga:          'jmpData/warga',
+  nominal:        'jmpData/nominal',
+  nominalHistory: 'jmpData/nominalHistory',
+  seeded:         'jmpData/seeded',
+  kasUmum:        'jmpData/kasUmum',
+  kasJimpitan:    'jmpData/kasJimpitan',
+  rekapEdit:      'jmpData/rekapEdit',
+  absen:          'jmpData/absen',
+  daftarKelompok: 'jmpData/daftarKelompok',
+  kegiatan:       'jmpData/kegiatan'
+};
+const MEM_FIELD_GET = {
+  users:          ()=>MEM.users,
+  warga:          ()=>MEM.warga,
+  nominal:        ()=>MEM.nominal,
+  nominalHistory: ()=>MEM.nominalHistory||[],
+  seeded:         ()=>MEM.seeded,
+  kasUmum:        ()=>MEM.kasUmum||[],
+  kasJimpitan:    ()=>MEM.kasJimpitan||[],
+  rekapEdit:      ()=>MEM.rekapEdit||{},
+  absen:          ()=>MEM.absen||[],
+  daftarKelompok: ()=>MEM.daftarKelompok||[],
+  kegiatan:       ()=>MEM.kegiatan||[]
+};
+// saveMEM(fields): kirim HANYA field yang berubah, misal saveMEM(['warga']).
+// Kalau dipanggil tanpa argumen (saveMEM()), tetap kirim semua field seperti
+// perilaku lama — ini cuma jaring pengaman kalau ada titik panggil yang lupa
+// disebutkan field-nya, bukan cara pakai yang dianjurkan.
+function saveMEM(fields){
+  if(!isOnline) return;
+  const keys = (Array.isArray(fields) && fields.length) ? fields : Object.keys(MEM_FIELD_PATH);
+  const updates = {};
+  keys.forEach(k=>{
+    const path=MEM_FIELD_PATH[k], get=MEM_FIELD_GET[k];
+    if(path && get) updates[path]=get();
+  });
+  if(!Object.keys(updates).length) return;
+  _db.ref().update(updates)
+    .then(()=>{ const el=document.getElementById('cstat'); if(el) el.innerHTML='<span class="cdot on"></span>'; })
+    .catch(e=>console.warn('Firebase save error',e));
 }
 
 // Migrasi otomatis role 'warga' → 'anggota' untuk data Firebase lama
@@ -649,7 +676,7 @@ function _migrasiRole(){
   let changed=false;
   if(!Array.isArray(MEM.users)) return;
   MEM.users.forEach(u=>{ if(u.role==='warga'){ u.role='anggota'; changed=true; } });
-  if(changed) saveMEM();
+  if(changed) saveMEM(['users']);
 }
 
 // ── Penyimpanan transaksi per-id (BUKAN overwrite array) ──────────────────
@@ -765,6 +792,10 @@ function loadMEM(){
       seedIfNeeded();
     }
     _setLoginReady(true);
+    _memReady=true;
+    // Kalau session lama sudah dipulihkan (refresh/reopen tab) dan sempat nunggu
+    // data, baru sekarang aman untuk masuk ke halaman utama — data sudah lengkap.
+    if(_pendingAutoStart && CU){ _pendingAutoStart=false; startApp(true); }
 
     // ── Migrasi otomatis: array 'jmpData/transaksi' (lama) → object 'jmpData/transaksiById' (baru) ──
     // Tujuan: tiap transaksi disimpan sebagai entri terpisah (key = id) supaya beberapa HP yang
@@ -836,13 +867,15 @@ function seedIfNeeded(){
   ];
   MEM.warga.forEach(w=>MEM.users.push({id:'u_'+w.id,name:w.name,role:'anggota',wargaId:w.id,username:w.id.toLowerCase(),password:'anggota123'}));
   MEM.seeded=true; MEM.nominal=2000; MEM.nominalHistory=[{from:'2000-01-01',amount:2000}];
-  saveMEM();
+  saveMEM(['warga','users','seeded','nominal','nominalHistory']);
 }
 loadMEM();
 
 // Auto-start jika session masih ada (refresh/back dari HP)
 window.addEventListener('DOMContentLoaded', ()=>{
-  if(CU) startApp();
+  if(!CU) return;
+  if(_memReady) startApp(true);   // data sudah siap → langsung masuk, coba tetap di halaman terakhir
+  else _pendingAutoStart=true;    // data masih dimuat → tunggu loadMEM() selesai (lihat _setLoginReady(true) di atas)
 });
 
 // ── Sync offline queue ──────────────────────────────────────
@@ -1358,6 +1391,11 @@ function getRTStats(rt){
 // AUTH
 // ════════════════════════════════════════════════════════════
 let CU=null;
+// _memReady: true setelah loadMEM() SELESAI ambil data dari Firebase.
+// _pendingAutoStart: dipasang oleh DOMContentLoaded kalau session masih ada
+// (refresh/reopen tab) TAPI datanya belum selesai dimuat — startApp() ditunda
+// sampai _memReady jadi true, supaya home tidak sempat render dengan MEM kosong.
+let _memReady=false, _pendingAutoStart=false;
 
 // Restore session jika ada (cegah logout saat refresh/back)
 (function restoreSession(){
@@ -1387,7 +1425,7 @@ function login(){
   // Migrasi role lama 'warga' → 'anggota' otomatis
   if(found.role==='warga'){
     found.role='anggota';
-    saveMEM();
+    saveMEM(['users']);
   }
   CU=found;
   sessionStorage.setItem('jmp_cu',JSON.stringify(CU));
@@ -1403,17 +1441,29 @@ function logout(){
   // Ganti history state ke login agar back setelah logout tidak masuk app lagi
   history.replaceState({page:'login'},'','#login');
 }
-function startApp(){
+function startApp(_restorePage){
   document.getElementById('LS').style.display='none';
   document.getElementById('APP').style.display='flex';
   document.getElementById('brole').textContent={admin:'Admin',divisi:'Divisi',petugas:'Petugas',panitia:'Panitia',warga:'Anggota',anggota:'Anggota'}[CU.role]||CU.role;
   document.getElementById('tbs').textContent=CU.name;
   document.getElementById('cstat').innerHTML='<span class="cdot '+(isOnline?'on':'off')+'"></span>';
   updateSyncPill();
-  // Push state awal 'home' agar back HP punya entry untuk kembali ke home
-  history.replaceState({page:'home'},'','#home');
-  try{ pgHome(); }catch(e){
-    console.error('pgHome error:', e);
+  // _restorePage=true artinya ini refresh/buka-ulang tab (bukan login manual
+  // baru) → coba tetap di halaman terakhir, dibaca dari #hash url (browser
+  // otomatis mempertahankan hash pas refresh, jadi tidak perlu simpan sendiri).
+  // Kalau bukan restore (login manual biasa) atau hash-nya tidak dikenal,
+  // tetap mulai dari Home seperti biasa. Tiap halaman tujuan sudah punya
+  // validasi role/data sendiri, jadi kalau ternyata sudah tidak valid lagi
+  // (misal buka detail kegiatan yang datanya sudah hilang), dia otomatis
+  // balik sendiri ke Home/menu induknya — aman dicoba.
+  let restoreTo='home';
+  if(_restorePage){
+    const hashPage=(location.hash||'').replace('#','');
+    if(hashPage && (hashPage==='home' || _PAGE_BACK.hasOwnProperty(hashPage))) restoreTo=hashPage;
+  }
+  if(restoreTo==='home') history.replaceState({page:'home'},'','#home');
+  try{ go(restoreTo, true); }catch(e){
+    console.error('startApp render error:', e);
     document.getElementById('MC').innerHTML='<div style="padding:20px;color:red">Error: '+e.message+'</div>';
   }
 }
@@ -1563,6 +1613,11 @@ function pgHome(){
       </div>
       <div class="menu-card" onclick="go('kegiatan')" style="border-color:#c5b4f0;background:#f5f0ff">
         <span class="mc-icon">🎪</span><span class="mc-label" style="color:#5a2d9e">Kegiatan</span><span class="mc-sub">Lihat kegiatan</span>
+      </div>
+      <div class="menu-card" onclick="go('kas')" style="background:linear-gradient(135deg,#1a3a5c,#2563a8)">
+        <span class="mc-icon">💰</span>
+        <span class="mc-label" style="color:#fff">Kas</span>
+        <span class="mc-sub" style="color:#a8c8f0">Lihat buku kas & jimpitan</span>
       </div>
     </div>`;
   } else if(CU.role==='panitia'){
@@ -2165,7 +2220,14 @@ function _notaWrap(title, subtitle, innerHTML, widthPx){
   const old=document.getElementById('_notaTmp'); if(old) old.remove();
   const wrap=document.createElement('div');
   wrap.id='_notaTmp';
-  wrap.style.cssText=`position:fixed;left:-9999px;top:0;width:${widthPx}px;background:#ffffff;padding:26px 24px;font-family:'Plus Jakarta Sans',sans-serif;box-sizing:border-box`;
+  // Ditaruh di luar layar (left:-9999px) — ini AMAN untuk html2canvas dan tidak
+  // menghasilkan gambar putih kosong (beda dengan trik opacity:0/visibility,
+  // yang justru bikin html2canvas tidak "melihat" elemennya sama sekali).
+  // Lebar dibuat "min-width" (bukan width tetap) supaya kalau isinya (tabel
+  // dengan banyak kolom minggu / nama yang panjang) butuh ruang lebih dari
+  // perkiraan widthPx, kotaknya ikut melebar mengikuti konten — bukan malah
+  // kontennya yang kepotong di kanan karena dipaksa muat di lebar tetap.
+  wrap.style.cssText=`position:fixed;left:-9999px;top:0;min-width:${widthPx}px;width:max-content;background:#ffffff;padding:26px 24px;font-family:'Plus Jakarta Sans',sans-serif;box-sizing:border-box`;
   wrap.innerHTML=`
     <div style="text-align:center;margin-bottom:16px;padding-bottom:14px;border-bottom:3px solid #1a6b3c">
       <div style="font-family:'Playfair Display',serif;font-size:20px;font-weight:700;color:#1a6b3c">🎪 Jimpitan Digital</div>
@@ -2181,7 +2243,14 @@ function _notaWrap(title, subtitle, innerHTML, widthPx){
 }
 function _notaSnapshot(node, filename){
   if(typeof html2canvas==='undefined'){showToast('❌ Gagal memuat modul gambar, coba lagi');node.remove();return;}
-  html2canvas(node,{scale:2,backgroundColor:'#ffffff',useCORS:true}).then(canvas=>{
+  // Ukur lebar/tinggi ASLI setelah dirender (scrollWidth/scrollHeight bisa lebih
+  // besar dari CSS width kalau ada overflow, misal tabel dgn banyak kolom nowrap)
+  // lalu suruh html2canvas capture SEBESAR itu juga — supaya tidak ada bagian
+  // yang kepotong. x/y sengaja TIDAK diubah (biarkan auto dari posisi asli node),
+  // karena kalau dipaksa ke 0,0 padahal node-nya ada di left:-9999px, hasilnya
+  // malah salah crop / kosong putih.
+  const fullW=node.scrollWidth, fullH=node.scrollHeight;
+  html2canvas(node,{scale:2,backgroundColor:'#ffffff',useCORS:true,width:fullW,height:fullH}).then(canvas=>{
     const a=document.createElement('a');
     a.download=filename;
     a.href=canvas.toDataURL('image/png');
@@ -2993,7 +3062,12 @@ function buildRiwayatScan(){
       return true;
     });
   const rsTotalEl=document.getElementById('rsTotal');
-  if(rsTotalEl) rsTotalEl.textContent=rpFmt(filteredAll.reduce((s,t)=>s+t.nominal,0));
+  // PERBAIKAN: pakai _realCashSum (uang asli yang beneran diserahkan per kejadian
+  // bayar), bukan jumlah nominal mentah. Kalau warga punya sisa kredit minggu lalu
+  // lalu scan lagi minggu ini, allocatePayment() menghapus baris kredit lama &
+  // membuat ulang semua baris alokasi bertanggal HARI INI — kalau dijumlah polos,
+  // kredit lama itu ikut kehitung LAGI seolah uang baru hari ini/minggu berjalan.
+  if(rsTotalEl) rsTotalEl.textContent=rpFmt(_realCashSum(filteredAll));
   const trx=filteredAll
     .sort((a,b)=>new Date(b.date)-new Date(a.date))
     .slice(0,200);
@@ -3013,7 +3087,10 @@ function buildRiwayatScan(){
       const u=MEM.users.find(x=>x.id===t0.userId);
       const d=new Date(t0.date);
       const tgl=d.toLocaleDateString('id-ID');
-      const total=g.reduce((s,t)=>s+t.nominal,0);
+      // PERBAIKAN: sama seperti total di atas — pakai uang asli per kejadian
+      // (_realCashSum), bukan jumlah nominal mentah, biar kredit lama yang
+      // "kepakai" lagi tidak tertulis dobel sebagai uang baru hari ini.
+      const total=_realCashSum(g);
       const iuranLabels=g.filter(t=>!t.isCredit&&!t.isDebt).map(t=>weekLabel(t.weekKey));
       const debtLabels=g.filter(t=>t.isDebt).map(t=>weekLabel(t.weekKey));
       const creditTotal=g.filter(t=>t.isCredit).reduce((s,t)=>s+t.nominal,0);
@@ -3335,7 +3412,7 @@ function saveExempt(){
     MEM.warga[i].exemptUntil=sampai;
   }
 
-  saveMEM();
+  saveMEM(['warga']);
   showToast('✅ Pengaturan tunggakan '+MEM.warga[i].name+' disimpan');
   closeModal('moExempt');
   buildWarga();
@@ -3366,14 +3443,14 @@ function saveEditW(){
   else delete MEM.warga[i].startDate;
   const ui=MEM.users.findIndex(u=>u.wargaId===editWId);
   if(ui!==-1) MEM.users[ui].name=name;
-  saveMEM(); closeModal('moEditW'); showToast('✅ Data anggota diperbarui!'); buildWarga();
+  saveMEM(['warga','users']); closeModal('moEditW'); showToast('✅ Data anggota diperbarui!'); buildWarga();
 }
 async function delWarga(id){
   if(!confirm('Hapus anggota ini dan semua riwayatnya?'))return;
   MEM.warga=MEM.warga.filter(w=>w.id!==id);
   MEM.users=MEM.users.filter(u=>u.wargaId!==id);
   _trxRemoveWhere(t=>t.wargaId===id);
-  saveMEM(); showToast('🗑️ Anggota dihapus'); buildWarga();
+  saveMEM(['warga','users']); showToast('🗑️ Anggota dihapus'); buildWarga();
 }
 
 // transaksi manual
@@ -3768,7 +3845,7 @@ function hapusTarif(from){
   if(!confirm('Hapus tarif ini dari riwayat?'))return;
   MEM.nominalHistory=(MEM.nominalHistory||[]).filter(h=>h.from!==from);
   if(!MEM.nominalHistory.length) MEM.nominalHistory=[{from:'2000-01-01',amount:2000}];
-  _syncNominal(); saveMEM(); showToast('🗑️ Tarif dihapus'); pgAdmin();
+  _syncNominal(); saveMEM(['nominalHistory','nominal']); showToast('🗑️ Tarif dihapus'); pgAdmin();
 }
 function addWarga(){
   const name=document.getElementById('nw_n').value.trim().toUpperCase();
@@ -3777,7 +3854,7 @@ function addWarga(){
   const id='W'+Date.now();
   MEM.warga.push({id,name,rt,kelompok:1});
   MEM.users.push({id:'u_'+id,name,role:'anggota',wargaId:id,username:id.toLowerCase(),password:'anggota123'});
-  saveMEM(); showToast('✅ Anggota ditambahkan!'); document.getElementById('nw_n').value='';
+  saveMEM(['warga','users']); showToast('✅ Anggota ditambahkan!'); document.getElementById('nw_n').value='';
   pgAdmin();
 }
 
@@ -3792,7 +3869,7 @@ function updNominal(){
   if(i!==-1) MEM.nominalHistory[i].amount=n; // tanggal sama → update, bukan duplikat
   else MEM.nominalHistory.push({from:tglVal,amount:n});
   _syncNominal();
-  saveMEM();
+  saveMEM(['nominalHistory','nominal']);
   const tglLabel=new Date(tglVal+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'long',year:'numeric'});
   showToast('✅ Tarif '+rpFmt(n)+' berlaku mulai '+tglLabel);
   pgAdmin();
@@ -3888,8 +3965,10 @@ function terapkanSesuaianTarif(){
       });
     }
   });
+  // Catatan: fungsi ini cuma mengubah transaksi (sudah disinkron per-id lewat
+  // saveTrx() di atas) — tidak ada field MEM lain yang berubah, jadi saveMEM()
+  // di sini sengaja dihapus (dulu ada tapi tidak perlu & bikin upload sia-sia).
   if(isOnline){ saveTrx(); } else { showToast('⚠️ Sedang offline — perubahan akan sync otomatis saat online'); }
-  saveMEM();
   closeModal('moSesuaianTarif');
   showToast(`✅ ${plan.length} anggota disesuaikan ke tarif baru`);
   pgAdmin();
@@ -3913,7 +3992,7 @@ function saveEditUser(){
   if(!name||!uname){showToast('❌ Nama & username wajib diisi');return;}
   u.name=name; u.username=uname; u.role=role;
   if(pass) u.password=pass;
-  saveMEM(); closeModal('moEditUser'); showToast('✅ Akun berhasil diperbarui!');
+  saveMEM(['users']); closeModal('moEditUser'); showToast('✅ Akun berhasil diperbarui!');
   if(curPage==='kelolaAkun') _renderKelolaAkun(); else pgAdmin();
 }
 
@@ -3958,10 +4037,10 @@ function pgRiwayat(){
 }
 
 // ════════════════════════════════════════════════════════════
-// KAS — hanya admin
+// KAS — admin bisa kelola penuh, anggota cuma bisa lihat (view-only)
 // ════════════════════════════════════════════════════════════
 function pgKas(){
-  if(CU.role!=='admin'){go('home');return;}
+  if(CU.role!=='admin'&&CU.role!=='anggota'){go('home');return;}
   curPage='kas';
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('home')">← Beranda</button>
@@ -3996,7 +4075,8 @@ function _hitungSaldo(rows){
 }
 
 function _renderKas(jenis){
-  if(CU.role!=='admin'){go('home');return;}
+  if(CU.role!=='admin'&&CU.role!=='anggota'){go('home');return;}
+  const canEdit=CU.role==='admin';
   curPage = jenis==='umum'?'kasUmum':'kasJimpitan';
   const judul = jenis==='umum'?'📒 Buku Kas Umum':'📗 Buku Kas Jimpitan';
   const k = _kasKey(jenis);
@@ -4008,6 +4088,7 @@ function _renderKas(jenis){
   document.getElementById('MC').innerHTML=`
     <button class="back-btn" onclick="go('kas')">← Kas</button>
     <div class="ct">${judul}</div>
+    ${canEdit?`
     <div class="cd" style="margin-bottom:10px;padding:10px">
       <div style="font-size:11px;font-weight:700;color:var(--g);margin-bottom:8px">➕ Tambah Entri</div>
       <div style="display:grid;grid-template-columns:1fr 2fr;gap:6px;margin-bottom:6px">
@@ -4028,7 +4109,7 @@ function _renderKas(jenis){
           💾 Simpan
         </button>
       </div>
-    </div>
+    </div>`:''}
     <div class="cd">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div class="ct" style="margin:0;font-size:13px">📋 Transaksi</div>
@@ -4099,17 +4180,17 @@ function _buildKasList(jenis){
       </div>
     </div>
     <div class="tscroll"><table class="rtbl" style="font-size:11px;white-space:nowrap">
-      <tr><th style="width:55px">Tanggal</th><th>Keterangan</th><th style="width:80px">Masuk</th><th style="width:80px">Keluar</th><th style="width:80px">Saldo</th><th></th></tr>
+      <tr><th style="width:55px">Tanggal</th><th>Keterangan</th><th style="width:80px">Masuk</th><th style="width:80px">Keluar</th><th style="width:80px">Saldo</th>${CU.role==='admin'?'<th></th>':''}</tr>
       ${rows.map((r,i)=>`<tr style="${i%2?'background:#f7fbf8':''}">
         <td style="white-space:nowrap">${new Date(r.tgl+'T00:00:00').toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'2-digit'})}</td>
         <td style="white-space:nowrap">${r.ket}</td>
         <td style="color:var(--g);text-align:right;white-space:nowrap">${r.masuk?rpFmt(r.masuk):'-'}</td>
         <td style="color:var(--red);text-align:right;white-space:nowrap">${r.keluar?rpFmt(r.keluar):'-'}</td>
         <td style="font-weight:700;text-align:right;white-space:nowrap">${rpFmt(r.saldo)}</td>
-        <td style="display:flex;gap:4px">
+        ${CU.role==='admin'?`<td style="display:flex;gap:4px">
           <button class="bsm bsm-o" onclick="_editKas('${jenis}','${r.id}')">✏️</button>
           <button class="bsm bsm-r" onclick="_hapusKas('${jenis}','${r.id}')">🗑️</button>
-        </td>
+        </td>`:''}
       </tr>`).join('')}
     </table></div>`;
 }
@@ -4168,6 +4249,7 @@ function _exportGambarKas(jenis){
 }
 
 function _tambahKas(jenis){
+  if(CU.role!=='admin'){showToast('❌ Hanya admin yang bisa menambah entri kas');return;}
   const tgl=document.getElementById('k_tgl').value;
   const ket=document.getElementById('k_ket').value.trim();
   const masuk=_unRb(document.getElementById('k_masuk').value);
@@ -4177,7 +4259,7 @@ function _tambahKas(jenis){
   const k=_kasKey(jenis);
   if(!Array.isArray(MEM[k])) MEM[k]=[];
   MEM[k].push({id:'K'+Date.now(),tgl,ket,masuk,keluar});
-  saveMEM(); showToast('✅ Tersimpan!');
+  saveMEM([k]); showToast('✅ Tersimpan!');
   document.getElementById('k_ket').value='';
   document.getElementById('k_masuk').value='';
   document.getElementById('k_keluar').value='';
@@ -4185,6 +4267,7 @@ function _tambahKas(jenis){
 }
 
 function _editKas(jenis, id){
+  if(CU.role!=='admin'){showToast('❌ Hanya admin yang bisa mengubah entri kas');return;}
   const k=_kasKey(jenis);
   const r=MEM[k].find(x=>x.id===id); if(!r)return;
   // Buat modal edit sederhana
@@ -4219,6 +4302,7 @@ function _editKas(jenis, id){
 }
 
 function _simpanEditKas(jenis, id){
+  if(CU.role!=='admin'){showToast('❌ Hanya admin yang bisa mengubah entri kas');return;}
   const tgl=document.getElementById('_ke_tgl').value;
   const ket=document.getElementById('_ke_ket').value.trim();
   const masuk=_unRb(document.getElementById('_ke_masuk').value);
@@ -4228,16 +4312,17 @@ function _simpanEditKas(jenis, id){
   const k=_kasKey(jenis);
   const r=MEM[k].find(x=>x.id===id); if(!r)return;
   r.tgl=tgl; r.ket=ket; r.masuk=masuk; r.keluar=keluar;
-  saveMEM();
+  saveMEM([k]);
   document.getElementById('_kasEditModal').remove();
   showToast('✅ Entri berhasil diperbarui!');
   _buildKasList(jenis);
 }
 
 function _hapusKas(jenis,id){
+  if(CU.role!=='admin'){showToast('❌ Hanya admin yang bisa menghapus entri kas');return;}
   const k=_kasKey(jenis);
   MEM[k]=MEM[k].filter(r=>r.id!==id);
-  saveMEM(); _buildKasList(jenis); showToast('🗑️ Dihapus');
+  saveMEM([k]); _buildKasList(jenis); showToast('🗑️ Dihapus');
 }
 
 function _exportKas(jenis){
@@ -4445,6 +4530,9 @@ function _buildRekapJimpitan(){
     return;
   }
   const isAdmin=CU.role==='admin';
+  // Edit nominal per RT dibuka juga untuk divisi (bukan cuma admin) — tapi
+  // "Catat/Hapus ke Kas Jimpitan" (posting ke buku kas permanen) tetap khusus admin.
+  const canEditNominal=isAdmin||CU.role==='divisi';
   if(!MEM.rekapEdit) MEM.rekapEdit={};
   const now=new Date();
 
@@ -4544,7 +4632,7 @@ function _buildRekapJimpitan(){
             return `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0 3px 10px">
               <div style="font-size:11px;color:var(--tl)">${rt}</div>
               <div>
-                ${isAdmin
+                ${canEditNominal
                   ? `<input type="text" inputmode="numeric" value="${_fmtRb(iuranRtFinal)}"
                       style="width:80px;text-align:right;border:1px solid #ccc;border-radius:6px;padding:2px 6px;font-size:12px"
                       oninput="_liveRb(this,event)"
@@ -4562,7 +4650,7 @@ function _buildRekapJimpitan(){
         <div style="font-weight:700">Total Minggu</div>
         <div style="font-weight:700;color:var(--g)">${rpFmt(total)}</div>
       </div>
-      ${isAdmin&&sudahLewat?(()=>{
+      ${canEditNominal&&sudahLewat?(()=>{
         const kasKey='KJ_'+wk.key;
         const sudahCatat=Array.isArray(MEM.kasJimpitan)&&MEM.kasJimpitan.find(r=>r.id===kasKey);
         return sudahCatat
@@ -4639,7 +4727,7 @@ function _saveRekapEdit(weekKey, field, val){
   if(!MEM.rekapEdit) MEM.rekapEdit={};
   if(!MEM.rekapEdit[weekKey]) MEM.rekapEdit[weekKey]={};
   MEM.rekapEdit[weekKey][field]=_unRb(val);
-  saveMEM();
+  saveMEM(['rekapEdit']);
   _buildRekapJimpitan();
 }
 
@@ -4649,7 +4737,7 @@ function _catatRjKas(weekKey, weekLabel, total){
   if(MEM.kasJimpitan.find(r=>r.id===kasKey)){showToast('\u26a0\ufe0f Sudah pernah dicatat');return;}
   const tgl=new Date().toISOString().split('T')[0];
   MEM.kasJimpitan.push({id:kasKey,tgl,ket:'Jimpitan '+weekLabel,masuk:total,keluar:0});
-  saveMEM();
+  saveMEM(['kasJimpitan']);
   showToast('\u2705 Berhasil dicatat ke Kas Jimpitan!');
   _buildRekapJimpitan();
 }
@@ -4657,7 +4745,7 @@ function _catatRjKas(weekKey, weekLabel, total){
 function _hapusRjKas(kasKey){
   if(!Array.isArray(MEM.kasJimpitan)) return;
   MEM.kasJimpitan=MEM.kasJimpitan.filter(r=>r.id!==kasKey);
-  saveMEM();
+  saveMEM(['kasJimpitan']);
   showToast('\uD83D\uDDD1\uFE0F Catatan kas dihapus');
   _buildRekapJimpitan();
 }
@@ -4935,7 +5023,7 @@ function saveEditAbsen(){
   if(!nama.length){showToast('❌ Minimal 1 nama');return;}
   const a=MEM.absen.find(x=>x.id===_editAbsenId); if(!a)return;
   a.nama=nama;
-  saveMEM();
+  saveMEM(['absen']);
   document.getElementById('_moEditAbsen').remove();
   buildRekapAbsen();
   showToast('✅ Absen berhasil diperbarui!');
@@ -4961,7 +5049,7 @@ function _getDK(){
       nama:'Kelompok '+(i+1),
       anggota:[]
     }));
-    saveMEM();
+    saveMEM(['daftarKelompok']);
   }
   return MEM.daftarKelompok;
 }
@@ -5058,7 +5146,7 @@ function _dkSimpan(){
   const dk=_getDK();
   dk.push({id:'dk_'+Date.now(),nama,anggota});
   MEM.daftarKelompok=dk;
-  saveMEM();
+  saveMEM(['daftarKelompok']);
   _dkBarisTemp=[];
   _dkTab='daftar';
   showToast('✅ Kelompok '+nama+' berhasil ditambahkan!');
@@ -5123,7 +5211,7 @@ function _dkSimpanEdit(){
   const idx=dk.findIndex(x=>x.id===_dkEditId); if(idx===-1)return;
   dk[idx].nama=nama; dk[idx].anggota=anggota;
   MEM.daftarKelompok=dk;
-  saveMEM();
+  saveMEM(['daftarKelompok']);
   document.getElementById('_dkEditModal').remove();
   showToast('✅ Kelompok berhasil diperbarui!');
   _renderDaftarKelompok();
@@ -5134,7 +5222,7 @@ function _dkHapus(id){
   const k=dk.find(x=>x.id===id);
   if(!confirm('Hapus kelompok "'+k?.nama+'"?\nData absen yang sudah tersimpan tidak ikut terhapus.'))return;
   MEM.daftarKelompok=dk.filter(x=>x.id!==id);
-  saveMEM();
+  saveMEM(['daftarKelompok']);
   showToast('🗑️ Kelompok dihapus');
   _renderDaftarKelompok();
 }
@@ -5160,7 +5248,7 @@ function _reRender(){
 function hapusAbsen(id){
   if(!confirm('Hapus data absen ini?'))return;
   MEM.absen=MEM.absen.filter(a=>a.id!==id);
-  saveMEM(); buildRekapAbsen(); showToast('🗑️ Data absen dihapus');
+  saveMEM(['absen']); buildRekapAbsen(); showToast('🗑️ Data absen dihapus');
 }
 // ── KELOLA AKUN ──────────────────────────────────────────────
 let _kaTab='daftar';
@@ -5248,7 +5336,7 @@ function hapusAkun(id){
   if(id===CU.id){showToast('❌ Tidak bisa hapus akun sendiri');return;}
   if(!confirm('Hapus akun "'+u.name+'" ('+u.role+')?\nAksi ini tidak bisa dibatalkan.'))return;
   MEM.users=MEM.users.filter(x=>x.id!==id);
-  saveMEM();
+  saveMEM(['users']);
   showToast('🗑️ Akun '+u.name+' dihapus');
   _renderKelolaAkun();
 }
@@ -5262,7 +5350,7 @@ function doTambahAkun(){
   if(MEM.users.find(u=>u.username===uname)){showToast('❌ Username sudah dipakai');return;}
   const newId='u_'+Date.now();
   MEM.users.push({id:newId,name,role,username:uname,password:pass});
-  saveMEM();
+  saveMEM(['users']);
   showToast('✅ Akun '+name+' berhasil ditambahkan!');
   _kaTab='daftar';
   _renderKelolaAkun();
@@ -5396,7 +5484,7 @@ function _toggleSelesaiKegiatan(id){
   if(CU.role!=='admin'){showToast('❌ Hanya admin yang bisa mengunci/membuka kegiatan');return;}
   const kg=MEM.kegiatan.find(x=>x.id===id); if(!kg)return;
   kg.selesai=!kg.selesai;
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast(kg.selesai?'🔒 Kegiatan ditandai selesai & dikunci':'🔓 Kegiatan dibuka kembali');
   if(curPage==='kegiatanDetail') pgKegiatanDetail();
   else _renderDaftarKegiatan();
@@ -5434,7 +5522,7 @@ function _simpanPanitiaKegiatan(id){
   const kg=MEM.kegiatan.find(x=>x.id===id); if(!kg)return;
   const checked=[...document.querySelectorAll('._kgPanitiaChk:checked')].map(el=>el.value);
   kg.panitiaIds=checked;
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast('✅ Panitia kegiatan diperbarui!');
 }
 
@@ -5520,7 +5608,7 @@ function _tambahKgIuran(){
   if(!kg.iuran) kg.iuran=[];
   kg.iuran.push({id:'KI'+Date.now(),nama,nominal});
   _syncKgIuranToKas(kg);
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast('✅ Iuran ditambahkan!');
   document.getElementById('ki_nama').value='';
   document.getElementById('ki_nom').value=_fmtRb(kg.nominalDefault||'');
@@ -5564,7 +5652,7 @@ function _simpanEditKgIuran(iid){
   if(!nama){showToast('❌ Nama wajib diisi');return;}
   item.nama=nama; item.nominal=nominal;
   _syncKgIuranToKas(kg);
-  saveMEM();
+  saveMEM(['kegiatan']);
   document.getElementById('_kgIuranEditModal').remove();
   showToast('✅ Iuran diperbarui!');
   _renderKgIuran();
@@ -5576,7 +5664,7 @@ function _hapusKgIuran(iid){
   if(kg.selesai){showToast('❌ Kegiatan ini sudah dikunci (selesai)');return;}
   kg.iuran=(kg.iuran||[]).filter(x=>x.id!==iid);
   _syncKgIuranToKas(kg);
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast('🗑️ Iuran dihapus');
   _renderKgIuran();
 }
@@ -5716,7 +5804,7 @@ function _tambahKgKas(){
   if(!masuk&&!keluar){showToast('❌ Isi pemasukan atau pengeluaran');return;}
   if(!kg.kas) kg.kas=[];
   kg.kas.push({id:'KK'+Date.now(),tgl,ket,masuk,keluar,auto:false});
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast('✅ Entri kas ditambahkan!');
   document.getElementById('kk_ket').value='';
   document.getElementById('kk_masuk').value='';
@@ -5767,7 +5855,7 @@ function _simpanEditKgKas(kid){
   if(!tgl||!ket){showToast('❌ Tanggal & keterangan wajib diisi');return;}
   if(!masuk&&!keluar){showToast('❌ Isi pemasukan atau pengeluaran');return;}
   r.tgl=tgl; r.ket=ket; r.masuk=masuk; r.keluar=keluar;
-  saveMEM();
+  saveMEM(['kegiatan']);
   document.getElementById('_kgKasEditModal').remove();
   showToast('✅ Entri diperbarui!');
   _renderKgKas();
@@ -5778,7 +5866,7 @@ function _hapusKgKas(kid){
   const kg=MEM.kegiatan.find(x=>x.id===_kgId); if(!kg)return;
   if(kg.selesai){showToast('❌ Kegiatan ini sudah dikunci (selesai)');return;}
   kg.kas=(kg.kas||[]).filter(x=>x.id!==kid);
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast('🗑️ Entri dihapus');
   _renderKgKas();
 }
@@ -5837,7 +5925,7 @@ function _simpanKegiatan(id){
   } else {
     MEM.kegiatan.push({id:'KG'+Date.now(),nama,adaIuran,nominalDefault,iuran:[],kas:[]});
   }
-  saveMEM();
+  saveMEM(['kegiatan']);
   document.getElementById('_kgModal').remove();
   showToast(id?'✅ Kegiatan diperbarui!':'✅ Kegiatan berhasil dibuat!');
   _renderDaftarKegiatan();
@@ -5848,7 +5936,7 @@ function _hapusKegiatan(id){
   const kg=MEM.kegiatan.find(x=>x.id===id);
   if(!confirm('Hapus kegiatan "'+kg.nama+'"?\nSemua data iuran & kas akan ikut terhapus.'))return;
   MEM.kegiatan=MEM.kegiatan.filter(x=>x.id!==id);
-  saveMEM();
+  saveMEM(['kegiatan']);
   showToast('🗑️ Kegiatan dihapus');
   _renderDaftarKegiatan();
 }
