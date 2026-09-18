@@ -1602,8 +1602,8 @@ function pgHome(){
         <span class="mc-icon">⚠️</span><span class="mc-label">Tunggakan</span><span class="mc-sub">${all.debtCount} Anggota</span>
         ${all.debtCount>0?`<span class="mc-badge">${all.debtCount}</span>`:''}
       </div>
-      <div class="menu-card" onclick="go('rekapJimpitan')" style="background:linear-gradient(135deg,#5c3a1a,#a86325)">
-        <span class="mc-icon">📊</span><span class="mc-label" style="color:#fff">Rekap Jimpitan</span><span class="mc-sub" style="color:#f0cfa8">Pemasukan per minggu</span>
+      <div class="menu-card" onclick="go('kas')" style="background:linear-gradient(135deg,#1a3a5c,#2563a8)">
+        <span class="mc-icon">💰</span><span class="mc-label" style="color:#fff">Kas</span><span class="mc-sub" style="color:#a8c8f0">Lihat buku kas & jimpitan</span>
       </div>
       <div class="menu-card" onclick="go('riwayatScan')">
         <span class="mc-icon">📋</span><span class="mc-label">Riwayat Scan</span><span class="mc-sub">Detail transaksi</span>
@@ -1613,11 +1613,6 @@ function pgHome(){
       </div>
       <div class="menu-card" onclick="go('kegiatan')" style="border-color:#c5b4f0;background:#f5f0ff">
         <span class="mc-icon">🎪</span><span class="mc-label" style="color:#5a2d9e">Kegiatan</span><span class="mc-sub">Lihat kegiatan</span>
-      </div>
-      <div class="menu-card" onclick="go('kas')" style="background:linear-gradient(135deg,#1a3a5c,#2563a8)">
-        <span class="mc-icon">💰</span>
-        <span class="mc-label" style="color:#fff">Kas</span>
-        <span class="mc-sub" style="color:#a8c8f0">Lihat buku kas & jimpitan</span>
       </div>
     </div>`;
   } else if(CU.role==='panitia'){
