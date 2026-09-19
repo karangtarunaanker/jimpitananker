@@ -491,7 +491,12 @@ body{font-family:'Plus Jakarta Sans',sans-serif;background:var(--bg);color:var(-
         <option value="panitia">Panitia</option>
         <option value="anggota">Anggota</option>
       </select></div>
-    <div class="fg" style="margin-top:10px"><label>Password Baru</label><input id="eu_pass" class="fi" type="text" placeholder="Kosongkan jika tidak diubah" autocomplete="new-password"></div>
+    <div class="fg" style="margin-top:10px"><label>Password</label>
+      <div style="position:relative">
+        <input id="eu_pass" class="fi" type="password" placeholder="Password" autocomplete="new-password" style="padding-right:44px;margin:0">
+        <button type="button" onclick="_toggleEuPass()" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:4px" aria-label="Lihat password">👁️</button>
+      </div>
+    </div>
     <div class="mbr">
       <button class="bca" onclick="closeModal('moEditUser')">Batal</button>
       <button class="bco" onclick="saveEditUser()">Simpan</button>
@@ -3975,8 +3980,14 @@ function openEditUser(id){
   document.getElementById('eu_name').value=u.name;
   document.getElementById('eu_uname').value=u.username;
   document.getElementById('eu_role').value=u.role||'anggota';
-  document.getElementById('eu_pass').value='';
+  const pw=document.getElementById('eu_pass');
+  pw.value=u.password||'';
+  pw.type='password';
   openModal('moEditUser');
+}
+function _toggleEuPass(){
+  const pw=document.getElementById('eu_pass');
+  pw.type = pw.type==='password' ? 'text' : 'password';
 }
 function saveEditUser(){
   const u=MEM.users.find(x=>x.id===editUserId); if(!u)return;
